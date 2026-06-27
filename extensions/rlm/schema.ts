@@ -1,5 +1,5 @@
-import { StringEnum } from "@mariozechner/pi-ai";
-import { Static, Type } from "@sinclair/typebox";
+import { StringEnum } from "@earendil-works/pi-ai";
+import { Static, Type } from "typebox";
 
 const opSchema = StringEnum(["start", "status", "wait", "cancel"] as const);
 const backendSchema = StringEnum(["cli", "tmux"] as const);
@@ -29,6 +29,9 @@ export const rlmToolParamsSchema = Type.Object({
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1000, maximum: 3600000 })),
   waitTimeoutMs: Type.Optional(Type.Integer({ minimum: 100, maximum: 3600000 })),
   piBin: Type.Optional(Type.String({ description: "Override pi binary path" })),
+  rBin: Type.Optional(Type.String({ description: "System R interpreter for r_eval. Defaults to PI_RLM_R_BIN or Rscript." })),
+  rLibPaths: Type.Optional(Type.Array(Type.String(), { description: "R library paths to prepend to .libPaths() for r_eval." })),
+  rRepos: Type.Optional(Type.String({ description: "CRAN-style repository URL for install_r_packages(). Defaults to PI_RLM_R_REPOS or cloud.r-project.org." })),
 });
 
 export type RlmToolParams = Static<typeof rlmToolParamsSchema>;

@@ -1,8 +1,8 @@
 {
   "name": "pi-skills",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": false,
-  "description": "Consolidated Pi skills, extensions, prompts, and orchestration helpers for R, bioinformatics rewrites, DuckDB C extensions, subagents, RLM, and goals.",
+  "description": "Skills-first Pi package for R, bioinformatics rewrites, DuckDB C extensions, system-R RLM, and a small goals extension.",
   "license": "MIT",
   "type": "module",
   "keywords": [
@@ -11,55 +11,72 @@
     "pi-skill",
     "bioinformatics",
     "r",
-    "duckdb",
-    "subagent"
+    "duckdb"
   ],
   "files": [
-    "extensions",
+    "extensions/goals",
+    "extensions/rlm",
     "skills",
-    "prompts",
-    "scripts",
     "docs",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "validate:rlm:spark": "node ./scripts/validate-rlm-spark.mjs"
+    "typecheck": "tsc --noEmit"
   },
   "pi": {
     "extensions": [
-      "./extensions/subagents",
-      "./extensions/rlm",
-      "./extensions/goals"
+      "./extensions/goals",
+      "./extensions/rlm"
     ],
     "skills": [
-      "./skills"
+      "./skills/bioinformatics-cache-and-index-design",
+      "./skills/bioinformatics-ffi-and-bindings",
+      "./skills/bioinformatics-rewrite-porting",
+      "./skills/bioinformatics-single-pass-analytics",
+      "./skills/duckdb-c-extension-api-stability",
+      "./skills/duckdb-c-extension-architecture",
+      "./skills/duckdb-c-extension-function-catalog",
+      "./skills/duckdb-c-extension-r-bindings",
+      "./skills/duckdb-c-extension-testing-and-interop",
+      "./skills/duckdb-c-extension-vendoring-and-shims",
+      "./skills/duckhts-development",
+      "./skills/duckhts-rewrite-porting",
+      "./skills/duckhts-wasm-debugging",
+      "./skills/duckqc-design",
+      "./skills/duckvep-design",
+      "./skills/genomics-sql-rewrites",
+      "./skills/library-first-bio-rewrites",
+      "./skills/r-package-development",
+      "./skills/s7-development"
     ],
-    "prompts": [
-      "./prompts"
-    ]
+    "prompts": []
   },
   "peerDependencies": {
-    "@mariozechner/pi-agent-core": "*",
-    "@mariozechner/pi-ai": "*",
-    "@mariozechner/pi-coding-agent": "*",
-    "@mariozechner/pi-tui": "*",
-    "@sinclair/typebox": "*"
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
-  "devDependencies": {
-    "@mariozechner/pi-agent-core": "^0.70.6",
-    "@mariozechner/pi-ai": "^0.70.6",
-    "@mariozechner/pi-coding-agent": "^0.70.6",
-    "@mariozechner/pi-tui": "^0.70.6",
-    "@sinclair/typebox": "^0.34.41",
-    "@types/node": "^24.0.0",
-    "typescript": "^5.8.3"
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
   },
   "dependencies": {
-    "hyparquet": "^1.25.6",
-    "typebox": "^1.1.34",
-    "webr": "^0.5.9"
+    "@duckdb/node-api": "^1.5.4-r.1"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.78.0",
+    "@earendil-works/pi-coding-agent": "^0.78.0",
+    "@types/node": "^24.0.0",
+    "typebox": "^1.1.38",
+    "typescript": "^5.8.3"
   }
 }

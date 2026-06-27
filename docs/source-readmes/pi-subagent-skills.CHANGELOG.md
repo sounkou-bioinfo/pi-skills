@@ -1,5 +1,7 @@
 # Changelog
 
+> Legacy source changelog kept for migration traceability. The consolidated `pi-skills` package no longer auto-loads the subagent resources described here. Use `pi install npm:pi-subagents` for maintained subagent functionality.
+
 ## Unreleased
 
 - Removed `jsonlite` from the webR control/signaling hot path for `FINAL(...)`, `FINAL_VAR(...)`, and `rlm_call(...)`

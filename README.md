@@ -1,15 +1,14 @@
 # pi-skills
 
-Consolidated user-wide Pi package for `sounkou-bioinfo`.
+Consolidated, skills-first Pi package for `sounkou-bioinfo`.
 
 This repo replaces the previously separate Pi skill/package repositories:
 
 - `pi-r-skills`
 - `pi-rewrites-bio-skills`
-- `pi-subagent-skills`
 - `pi-duckdb-c-extension-skills`
 
-It also includes the user-wide `/goals` extension so stateful slash-command behavior lives in one Pi package.
+It also includes the user-wide `/goals` extension and a lean RLM tool that uses system R directly.
 
 ## Install
 
@@ -23,24 +22,22 @@ After installing or updating in an interactive Pi session:
 /reload
 ```
 
-## Contents
+## Active contents
 
 ### Extensions
 
-- `subagents` — packaged subagent orchestration tool.
-- `rlm` — recursive long-context/RLM tool.
 - `goals` — Codex-style `/goals` and `/goal` session goal loop extension.
+- `rlm` — recursive long-context tool with `r_eval` backed by system `Rscript`, configurable R library paths, and DuckDB-backed parquet loading through Node.
 
-### Prompts
+### Subagents
 
-- `implement.md`
-- `parallel-recon.md`
-- `rlm-codebase-demo.md`
-- `rlm-csv-demo.md`
-- `rlm-json-demo.md`
-- `rlm-parquet-demo.md`
-- `rlm-r-eval-demo.md`
-- `scout-and-plan.md`
+This package no longer ships a homegrown subagent/scout/plan/recon implementation. Use the maintained package instead:
+
+```sh
+pi install npm:pi-subagents
+```
+
+That package already covers the runtime details we do not want to duplicate: child boundaries, fresh/fork context, async status, artifacts, worktrees, acceptance gates, and management commands.
 
 ### Skills
 
@@ -61,11 +58,22 @@ After installing or updating in an interactive Pi session:
 - `duckvep-design`
 - `genomics-sql-rewrites`
 - `library-first-bio-rewrites`
-- `parallel-codebase-recon`
-- `plan-implement-review`
 - `r-package-development`
 - `s7-development`
-- `subagent-orchestration`
+
+## RLM and R runtime direction
+
+`r_eval` now targets real system R, not webR. Configure it with:
+
+- tool param `rBin`, or env `PI_RLM_R_BIN` (default: `Rscript`)
+- tool param `rLibPaths`, or env `PI_RLM_R_LIBS` (`:`/`;` separated)
+- tool param `rRepos`, or env `PI_RLM_R_REPOS` (default: `https://cloud.r-project.org`)
+
+Inside `r_eval`, use `install_r_packages()`, `context_load()`, `context_r_load_code()`, `save_plot()`, `rlm_call()`, `FINAL()`, and `FINAL_VAR()`.
+
+Parquet context is loaded through `@duckdb/node-api`, which lines up with the DuckDB-native direction for DuckHTS, `ducknng`, and `ducktinycc`. DuckHTS stays the first target for deeper runtime integration.
+
+The longer-term worker design is tracked in `docs/rlm-r-nng-arrow-design.md`: persistent system-R workers over NNG/nanoarrow, with DuckDB extensions as first-class runtime peers.
 
 ## Development
 
@@ -74,7 +82,7 @@ npm install
 npm run typecheck
 ```
 
-The source docs copied from the old repos are in `docs/source-readmes/` for migration traceability.
+Runtime Pi APIs are peer dependencies supplied by Pi itself.
 
 ## License
 

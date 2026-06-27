@@ -1,5 +1,7 @@
 # pi-subagent-skills
 
+> Legacy source README kept for migration traceability. The consolidated `pi-skills` package no longer auto-loads the subagent resources described here. Use `pi install npm:pi-subagents` for maintained subagent functionality.
+
 A Pi package that bundles:
 
 - a `subagent` extension for delegating work to isolated Pi subprocesses

@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { runRlmEngine } from "./engine.js";
 import { rlmToolParamsSchema, type RlmToolParams } from "./schema.js";
 import { RunStore } from "./runs.js";
@@ -14,7 +14,7 @@ export default function extension(pi: ExtensionAPI): void {
     name: "rlm",
     label: "RLM",
     description:
-      "Recursive long-context orchestration with a Node-based, webR-ready environment. Supports start/status/wait/cancel and recursive decomposition over stored context.",
+      "Recursive long-context orchestration with system-R r_eval support. Supports start/status/wait/cancel and recursive decomposition over stored context.",
     parameters: rlmToolParamsSchema,
     async execute(_toolCallId, params: RlmToolParams, signal, onUpdate, ctx) {
       const op = params.op ?? "start";
@@ -108,6 +108,9 @@ function resolveStartInput(params: RlmToolParams, cwd: string): StartRunInput {
     grepLimit: params.grepLimit ?? 20,
     timeoutMs: params.timeoutMs ?? defaultTimeoutMs,
     piBin: params.piBin ?? "pi",
+    rBin: params.rBin ?? process.env.PI_RLM_R_BIN ?? "Rscript",
+    rLibPaths: params.rLibPaths ?? parsePathList(process.env.PI_RLM_R_LIBS),
+    rRepos: params.rRepos ?? process.env.PI_RLM_R_REPOS ?? "https://cloud.r-project.org",
   };
 }
 
@@ -241,6 +244,11 @@ function toRunDetails(record: RunRecord): Record<string, unknown> {
     finished_at: record.finishedAt,
     error: record.error,
   };
+}
+
+function parsePathList(value: string | undefined): string[] {
+  if (!value) return [];
+  return value.split(/[:;]/).map((part) => part.trim()).filter(Boolean);
 }
 
 function shorten(text: string, maxChars: number): string {

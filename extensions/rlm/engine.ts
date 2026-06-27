@@ -1,14 +1,14 @@
+import { DuckDBConnection } from "@duckdb/node-api";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
-import { asyncBufferFromFile, parquetReadObjects } from "hyparquet";
 import { completeWithCli } from "./backends.js";
 import { plannerPrompt, solverPrompt, synthesisPrompt } from "./prompts.js";
 import { evalInRepl, type ReplContext } from "./repl.js";
 import { startTmuxVisualizer } from "./tmux.js";
 import type { RlmAction, RlmContextKind, RlmNode, RlmObservation, RlmRunResult, RunArtifacts, StartRunInput } from "./types.js";
 import { chunkText, extractFirstJsonObject, grepText, normalizeTask, safeJsonParse, shortText } from "./utils.js";
-import { createWebRSession, evalWithWebR, type WebRSession } from "./webr.js";
+import { createRSession, type RSession } from "./system-r.js";
 
 interface EngineInput extends StartRunInput {
   runId: string;
@@ -225,7 +225,7 @@ export async function runRlmEngine(input: EngineInput, signal?: AbortSignal, pro
     state.nodesVisited += 1;
     state.maxDepthSeen = Math.max(state.maxDepthSeen, params.depth);
     const env = new NodeEnvironment(params.context, input.maxChunkChars, input.grepLimit);
-    let webRSession: WebRSession | undefined;
+    let rSession: RSession | undefined;
     const node: RlmNode = {
       id: nodeId,
       depth: params.depth,
@@ -310,9 +310,12 @@ export async function runRlmEngine(input: EngineInput, signal?: AbortSignal, pro
               : params.context.kind === "csv"
                 ? { kind: "csv" as const, text: params.context.text, columns: params.context.columns, rows: params.context.rows }
                 : { kind: "text" as const, text: params.context.text };
-          webRSession ??= await createWebRSession(rContext, {
+          rSession ??= await createRSession(rContext, {
             scopeId: `${input.runId}-${nodeId}`,
             artifactDir: artifacts.dir,
+            rBin: input.rBin,
+            rLibPaths: input.rLibPaths,
+            rRepos: input.rRepos,
             callRlm: async (task, subcontext, contextKind) => {
               const child = await runNode({
                 task,
@@ -330,12 +333,12 @@ export async function runRlmEngine(input: EngineInput, signal?: AbortSignal, pro
               };
             },
           });
-          const evalResult = await webRSession.eval(code);
+          const evalResult = await rSession.eval(code);
           addObservation(node, "note", `r_eval =>\n${shortText(evalResult.output, 6000)}`);
           if (evalResult.signaledFinal) {
             node.decision = {
               action: "final",
-              reason: evalResult.recursiveCalls > 0 ? `FINAL(...) returned from r_eval after ${evalResult.recursiveCalls} webR child call(s)` : "FINAL(...) returned from r_eval",
+              reason: evalResult.recursiveCalls > 0 ? `FINAL(...) returned from r_eval after ${evalResult.recursiveCalls} R child call(s)` : "FINAL(...) returned from r_eval",
             };
             node.result = evalResult.output.trim();
             node.status = "completed";
@@ -431,7 +434,7 @@ export async function runRlmEngine(input: EngineInput, signal?: AbortSignal, pro
       log("node_error", { nodeId, error: node.error });
       return node;
     } finally {
-      if (webRSession) await webRSession.close();
+      if (rSession) await rSession.close();
     }
   }
 
@@ -616,10 +619,15 @@ function parseJsonContext(text: string, label: string): ResolvedContext {
 }
 
 async function loadParquetContext(fullPath: string, label: string): Promise<ResolvedContext> {
-  const file = await asyncBufferFromFile(fullPath);
-  const rows = await parquetReadObjects({ file });
-  const columns = inferColumns(rows.map((row) => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, String(v ?? "")]))));
-  return { kind: "parquet", label, path: fullPath, columns, rows };
+  const connection = await DuckDBConnection.create();
+  try {
+    const reader = await connection.runAndReadAll(`SELECT * FROM read_parquet(${sqlString(fullPath)})`);
+    const rows = reader.getRowObjectsJson() as Array<Record<string, unknown>>;
+    const columns = inferColumns(rows.map((row) => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, String(v ?? "")]))));
+    return { kind: "parquet", label, path: fullPath, columns, rows };
+  } finally {
+    connection.closeSync();
+  }
 }
 
 function coerceRequestedSubcontext(value: unknown, requestedKind: string | undefined, parent: ResolvedContext): ResolvedContext {
@@ -710,6 +718,10 @@ function splitCsvLine(line: string): string[] {
 function csvEscape(value: string): string {
   if (!/[",\n]/.test(value)) return value;
   return `"${value.replace(/"/g, '""')}"`;
+}
+
+function sqlString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
 }
 
 function inferColumns(rows: CsvRow[]): string[] {

@@ -29,12 +29,13 @@ When using this skill:
 
 1. Inspect the package root for `DESCRIPTION`, `NAMESPACE`, `R/`, `man/`, `tests/`, `inst/tinytest/`, `vignettes/`, `.Rbuildignore`, and any `Makefile`.
 2. Prefer the repository's existing workflow over introducing a new one.
-3. Prefer modifying source files and regenerating derived artifacts rather than editing generated files by hand.
-4. Treat `NAMESPACE` and `man/*.Rd` as generated when the package uses roxygen2.
-5. Never manually edit roxygen2-generated artifacts or roxygen tags as a substitute for fixing the underlying R source documentation block.
-6. Use package-oriented commands from the package root.
-7. Make the smallest safe change and run the most relevant checks afterward.
-8. For CRAN-facing work, anticipate common review issues in examples, DESCRIPTION text, side effects, temp files, and overall check behavior rather than waiting for CRAN to report them.
+3. Do not introduce Node/npm/JavaScript tooling into an R package workflow unless the project already uses it or the user explicitly asks for it.
+4. Prefer modifying source files and regenerating derived artifacts rather than editing generated files by hand.
+5. Treat `NAMESPACE` and `man/*.Rd` as generated when the package uses roxygen2.
+6. Never manually edit roxygen2-generated artifacts or roxygen tags as a substitute for fixing the underlying R source documentation block.
+7. Use package-oriented commands from the package root.
+8. Make the smallest safe change and run the most relevant checks afterward.
+9. For CRAN-facing work, anticipate common review issues in examples, DESCRIPTION text, side effects, temp files, and overall check behavior rather than waiting for CRAN to report them.
 
 ## First checks
 
@@ -354,6 +355,7 @@ Citation practice in `Authors@R`:
 - If a package uses `renv`, respect the lockfile and project library workflow
 - If the project uses CI, align local checks with CI steps
 - Avoid introducing heavyweight dependencies unless justified
+- Avoid Node/npm/JavaScript sidecars for R package automation; prefer `Rscript`, `R CMD`, Makefile targets, and existing R-native tools
 - Do not switch a package from `tinytest` to `testthat` unless explicitly requested
 - Use `air` and `jarl` as optional complements to the package workflow, not substitutes for testing or `R CMD check`
 - If the repository already uses `styler`, `lintr`, or another formatter/linter, prefer the existing convention unless asked to migrate

@@ -23,6 +23,9 @@ export interface StartRunInput {
   grepLimit: number;
   timeoutMs: number;
   piBin: string;
+  rBin: string;
+  rLibPaths: string[];
+  rRepos: string;
 }
 
 export interface RunArtifacts {

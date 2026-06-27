@@ -224,7 +224,7 @@ export function rLoadCodeForContext(context: ReplContext): string {
       ].join("\n");
     case "json":
       return [
-        '# requires jsonlite in R/webR if available',
+        '# requires jsonlite in R if available',
         'if (!requireNamespace("jsonlite", quietly = TRUE)) stop("Install jsonlite to load JSON in R")',
         `jsonlite::fromJSON(${JSON.stringify(JSON.stringify(context.value))})`,
       ].join("\n");
