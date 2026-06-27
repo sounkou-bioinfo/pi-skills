@@ -66,7 +66,7 @@ After adding/removing/renaming public functions:
 2. run:
 
 ```bash
-python3 scripts/render_function_catalog.py
+Rscript scripts/render_function_catalog.R
 ```
 
 3. verify generated files under:

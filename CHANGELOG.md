@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1
+
+- Generate `README.md` from `README.Rmd`, deriving extension and skill lists from `package.json` plus skill frontmatter.
+- Replace the DuckDB function-catalog Python reference generator with an Rscript/jsonlite generator.
+- Use package-level `./extensions` and `./skills` entries instead of hand-maintained per-resource lists in `package.json`.
+- Remove copied source README/changelog snapshots; this is the only repo we maintain now.
+
 ## 1.1.0
 
 - Make the package skills-first while keeping only focused runtime extensions: `goals` and `rlm`.
@@ -12,6 +19,5 @@
 
 ## 1.0.0
 
-- Consolidate `pi-r-skills`, `pi-rewrites-bio-skills`, `pi-subagent-skills`, and `pi-duckdb-c-extension-skills` into one Pi package.
-- Include subagent, RLM, and goals extensions.
-- Include all skills and prompt templates from the source packages.
+- Consolidate earlier personal Pi skill repos into one package.
+- Initial consolidated package release.

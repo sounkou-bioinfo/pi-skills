@@ -41,9 +41,9 @@ export async function evalWithR(
   code: string,
   context: Extract<ReplContext, { kind: "text" | "csv" | "parquet" }>,
   optionsOrScopeId: EvalWithROptions | string = "default",
-  legacyArtifactDir?: string,
+  artifactDirForStringOptions?: string,
 ): Promise<EvalWithRResult> {
-  const session = await createRSession(context, optionsOrScopeId, legacyArtifactDir);
+  const session = await createRSession(context, optionsOrScopeId, artifactDirForStringOptions);
   try {
     return await session.eval(code);
   } finally {
@@ -54,11 +54,11 @@ export async function evalWithR(
 export async function createRSession(
   context: Extract<ReplContext, { kind: "text" | "csv" | "parquet" }>,
   optionsOrScopeId: EvalWithROptions | string = "default",
-  legacyArtifactDir?: string,
+  artifactDirForStringOptions?: string,
 ): Promise<RSession> {
   const options: EvalWithROptions =
     typeof optionsOrScopeId === "string"
-      ? { scopeId: optionsOrScopeId, artifactDir: legacyArtifactDir }
+      ? { scopeId: optionsOrScopeId, artifactDir: artifactDirForStringOptions }
       : optionsOrScopeId;
   const scopeId = options.scopeId ?? "default";
   const artifactDir = options.artifactDir;
@@ -171,7 +171,6 @@ function buildSessionSetup(input: {
     "context_text",
     "context",
     "install_r_packages",
-    "install_webr_packages",
     "save_plot",
     "context_lines",
     "context_grep",
@@ -195,10 +194,6 @@ function buildSessionSetup(input: {
     '  missing <- packages[!vapply(packages, requireNamespace, logical(1), quietly = TRUE)]',
     '  if (length(missing)) utils::install.packages(missing, repos = repos, lib = lib)',
     '  invisible(packages)',
-    '}',
-    'install_webr_packages <- function(...) {',
-    '  warning("install_webr_packages() is deprecated in pi-skills RLM; use install_r_packages() with system R instead.", call. = FALSE)',
-    '  install_r_packages(...)',
     '}',
     'save_plot <- function(filename, expr, device = c("png", "pdf", "svg"), width = 800, height = 600, pointsize = 12, bg = "white", ...) {',
     '  if (!nzchar(artifact_dir)) stop("artifact_dir is not configured")',

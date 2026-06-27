@@ -1,0 +1,170 @@
+---
+output:
+  github_document:
+    html_preview: false
+---
+
+```{r setup, include=FALSE}
+repo_root <- normalizePath(".", winslash = "/", mustWork = TRUE)
+
+require_package <- function(package) {
+  if (!requireNamespace(package, quietly = TRUE)) {
+    stop("Install the R package '", package, "' to render README.md", call. = FALSE)
+  }
+}
+
+require_package("jsonlite")
+
+pkg <- jsonlite::fromJSON(file.path(repo_root, "package.json"), simplifyVector = FALSE)
+
+strip_dot_slash <- function(x) sub("^\\./", "", x)
+
+expand_pi_entries <- function(entries, predicate) {
+  entries <- unlist(entries, use.names = FALSE)
+  entries <- strip_dot_slash(entries)
+  includes <- entries[!startsWith(entries, "!")]
+  excludes <- strip_dot_slash(sub("^!", "", entries[startsWith(entries, "!")]))
+
+  expand_one <- function(entry) {
+    if (grepl("[*?\\[]", entry)) {
+      return(Sys.glob(entry))
+    }
+    if (dir.exists(entry)) {
+      children <- list.files(entry, full.names = TRUE, recursive = FALSE, include.dirs = TRUE)
+      matches <- c(entry, children)
+      return(matches[file.info(matches)$isdir %in% TRUE])
+    }
+    entry
+  }
+
+  paths <- unique(unlist(lapply(includes, expand_one), use.names = FALSE))
+  excluded <- unique(unlist(lapply(excludes, expand_one), use.names = FALSE))
+  paths <- setdiff(paths, excluded)
+  paths <- paths[file.info(paths)$isdir %in% TRUE]
+  sort(paths[vapply(paths, predicate, logical(1))])
+}
+
+is_skill_dir <- function(path) file.exists(file.path(path, "SKILL.md"))
+is_extension_dir <- function(path) {
+  file.exists(file.path(path, "index.ts")) || file.exists(file.path(path, "index.js"))
+}
+
+frontmatter_value <- function(lines, key) {
+  if (!length(lines) || lines[[1]] != "---") return(NA_character_)
+  ends <- which(lines[-1] == "---")
+  if (!length(ends)) return(NA_character_)
+  block <- lines[seq.int(2, ends[[1]])]
+  hit <- grep(paste0("^", key, ":[[:space:]]*"), block, value = TRUE)
+  if (!length(hit)) return(NA_character_)
+  value <- sub(paste0("^", key, ":[[:space:]]*"), "", hit[[1]])
+  sub("^[\"']?(.*?)[\"']?$", "\\1", value, perl = TRUE)
+}
+
+read_skill_meta <- function(path) {
+  lines <- readLines(file.path(path, "SKILL.md"), warn = FALSE, encoding = "UTF-8")
+  name <- frontmatter_value(lines, "name")
+  description <- frontmatter_value(lines, "description")
+  if (is.na(name) || !nzchar(name)) name <- basename(path)
+  if (is.na(description)) description <- ""
+  list(name = name, description = description)
+}
+
+extension_descriptions <- c(
+  goals = "Codex-style `/goals` and `/goal` session goal loop extension.",
+  rlm = "Recursive long-context tool with `r_eval` backed by system `Rscript`, configurable R library paths, and DuckDB-backed parquet loading through Node."
+)
+
+extension_paths <- expand_pi_entries(pkg$pi$extensions, is_extension_dir)
+skill_paths <- expand_pi_entries(pkg$pi$skills, is_skill_dir)
+skills <- lapply(skill_paths, read_skill_meta)
+skills <- skills[order(vapply(skills, `[[`, character(1), "name"))]
+
+cat_bullets <- function(rows) {
+  invisible(lapply(rows, function(row) {
+    if (nzchar(row$description)) {
+      cat(sprintf("- `%s` — %s\n", row$name, row$description))
+    } else {
+      cat(sprintf("- `%s`\n", row$name))
+    }
+  }))
+}
+```
+
+# pi-skills
+
+<!-- README.md is generated from README.Rmd. Edit README.Rmd and run `npm run render:readme`. -->
+
+Personal, skills-first Pi package for `sounkou-bioinfo`.
+
+It includes domain skills, the user-wide `/goals` extension, and a lean RLM tool that uses system R directly.
+
+## Install
+
+```sh
+pi install git:github.com/sounkou-bioinfo/pi-skills
+```
+
+After installing or updating in an interactive Pi session:
+
+```text
+/reload
+```
+
+## Active contents
+
+The extension and skill lists below are generated from `package.json` plus skill frontmatter.
+
+### Extensions
+
+```{r extensions, results='asis', echo=FALSE}
+extension_rows <- lapply(extension_paths, function(path) {
+  name <- basename(path)
+  description <- if (name %in% names(extension_descriptions)) unname(extension_descriptions[[name]]) else ""
+  list(name = name, description = description)
+})
+cat_bullets(extension_rows)
+```
+
+### Subagents
+
+This package no longer ships a homegrown subagent/scout/plan/recon implementation. Use the maintained package instead:
+
+```sh
+pi install npm:pi-subagents
+```
+
+That package already covers the runtime details we do not want to duplicate: child boundaries, fresh/fork context, async status, artifacts, worktrees, acceptance gates, and management commands.
+
+### Skills
+
+```{r skills, results='asis', echo=FALSE}
+cat_bullets(skills)
+```
+
+## RLM and R runtime direction
+
+`r_eval` now targets real system R, not webR. Configure it with:
+
+- tool param `rBin`, or env `PI_RLM_R_BIN` (default: `Rscript`)
+- tool param `rLibPaths`, or env `PI_RLM_R_LIBS` (`:`/`;` separated)
+- tool param `rRepos`, or env `PI_RLM_R_REPOS` (default: `https://cloud.r-project.org`)
+
+Inside `r_eval`, use `install_r_packages()`, `context_load()`, `context_r_load_code()`, `save_plot()`, `rlm_call()`, `FINAL()`, and `FINAL_VAR()`.
+
+Parquet context is loaded through `@duckdb/node-api`, which lines up with the DuckDB-native direction for DuckHTS, `ducknng`, and `ducktinycc`. DuckHTS stays the first target for deeper runtime integration.
+
+The longer-term worker design is tracked in `docs/rlm-r-nng-arrow-design.md`: persistent system-R workers over NNG/nanoarrow, with DuckDB extensions as first-class runtime peers.
+
+## Development
+
+```sh
+npm install
+npm run typecheck
+npm run render:readme
+```
+
+Runtime Pi APIs are peer dependencies supplied by Pi itself.
+
+## License
+
+MIT. See `LICENSE`.

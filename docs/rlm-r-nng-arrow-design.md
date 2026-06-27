@@ -140,7 +140,7 @@ FINAL(x)
 FINAL_VAR("name")
 ```
 
-`install_webr_packages()` should not be promoted in new docs; if kept temporarily, make it an alias with a deprecation note.
+Old webR package helper names should not be kept or documented; use `install_r_packages()` for system-R package setup.
 
 ## Error handling requirements
 

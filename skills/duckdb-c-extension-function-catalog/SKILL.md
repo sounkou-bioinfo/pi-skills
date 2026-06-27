@@ -69,8 +69,8 @@ Common derivatives:
 - R helper registration tables
 - validation scripts
 
-A good default is a small Python renderer wired into `make` so docs can be refreshed reproducibly.
-Prefer the DuckHTS-style pattern where `functions.yaml` is stored as JSON-formatted YAML and rendered with Python standard-library code (`json`, `csv`, `pathlib`) instead of depending on PyYAML.
+A good default is a small R renderer wired into `make` so docs can be refreshed reproducibly.
+Prefer the DuckHTS-style pattern where `functions.yaml` is stored as JSON-formatted YAML/JSON and rendered with `Rscript` plus `jsonlite`, avoiding a Python/PyYAML sidecar in R-first projects.
 
 ### 3) Record lifecycle metadata
 
@@ -92,7 +92,7 @@ If you generate files from the catalog, CI should detect drift.
 A practical workflow is:
 
 - edit `functions.yaml`
-- run the Python renderer
+- run the R renderer
 - commit regenerated `functions.md` and `functions.tsv`
 - have CI fail if rerendering changes tracked outputs
 
@@ -106,7 +106,7 @@ A practical workflow is:
 ## Anti-patterns
 
 - hand-editing generated docs without updating the source catalog
-- requiring PyYAML or another parser dependency when a JSON-formatted YAML manifest and stdlib Python would do
+- adding a Python/PyYAML renderer to an R-first workflow when a small `Rscript` renderer over JSON-formatted YAML/JSON is enough
 - function names duplicated inconsistently across SQL and wrappers
 - no lifecycle metadata
 - examples that are not actually tested anywhere
@@ -121,4 +121,4 @@ A practical workflow is:
 - [Functions YAML pattern](references/functions-yaml-pattern.md)
 - [Catalog generation checklist](references/catalog-generation-checklist.md)
 - [Example catalog source](references/functions.example.yaml)
-- [Python generator stub](references/generate_function_catalog.py)
+- [R generator stub](references/generate_function_catalog.R)

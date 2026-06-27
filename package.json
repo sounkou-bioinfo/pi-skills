@@ -1,6 +1,6 @@
 {
   "name": "pi-skills",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": false,
   "description": "Skills-first Pi package for R, bioinformatics rewrites, DuckDB C extensions, system-R RLM, and a small goals extension.",
   "license": "MIT",
@@ -14,42 +14,26 @@
     "duckdb"
   ],
   "files": [
-    "extensions/goals",
-    "extensions/rlm",
+    "extensions",
     "skills",
     "docs",
+    "scripts",
     "README.md",
+    "README.Rmd",
     "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "render:readme": "Rscript scripts/render_readme.R",
+    "check:readme": "Rscript scripts/render_readme.R --check"
   },
   "pi": {
     "extensions": [
-      "./extensions/goals",
-      "./extensions/rlm"
+      "./extensions"
     ],
     "skills": [
-      "./skills/bioinformatics-cache-and-index-design",
-      "./skills/bioinformatics-ffi-and-bindings",
-      "./skills/bioinformatics-rewrite-porting",
-      "./skills/bioinformatics-single-pass-analytics",
-      "./skills/duckdb-c-extension-api-stability",
-      "./skills/duckdb-c-extension-architecture",
-      "./skills/duckdb-c-extension-function-catalog",
-      "./skills/duckdb-c-extension-r-bindings",
-      "./skills/duckdb-c-extension-testing-and-interop",
-      "./skills/duckdb-c-extension-vendoring-and-shims",
-      "./skills/duckhts-development",
-      "./skills/duckhts-rewrite-porting",
-      "./skills/duckhts-wasm-debugging",
-      "./skills/duckqc-design",
-      "./skills/duckvep-design",
-      "./skills/genomics-sql-rewrites",
-      "./skills/library-first-bio-rewrites",
-      "./skills/r-package-development",
-      "./skills/s7-development"
+      "./skills"
     ],
     "prompts": []
   },
