@@ -8,13 +8,13 @@ const defaultWaitTimeoutMs = 120000;
 const defaultTimeoutMs = 180000;
 
 export default function extension(pi: ExtensionAPI): void {
-  const runs = new RunStore();
+  const runs = new RunStore(1);
 
   pi.registerTool({
     name: "rlm",
     label: "RLM",
     description:
-      "Recursive long-context orchestration with system-R r_eval support. Supports start/status/wait/cancel and recursive decomposition over stored context.",
+      "Long-context controller with externalized file/data inspection and system-R evaluation. Recursion is explicit, shallow, serial by default, and budgeted to avoid sub-agent sprawl.",
     parameters: rlmToolParamsSchema,
     async execute(_toolCallId, params: RlmToolParams, signal, onUpdate, ctx) {
       const op = params.op ?? "start";
@@ -28,11 +28,16 @@ export default function extension(pi: ExtensionAPI): void {
           onUpdate?.({ content: [{ type: "text", text: line }], details: {} });
         };
 
-        const record = runs.start(input, (runId, runSignal) => runRlmEngine({ ...input, runId }, runSignal, progress), signal);
+        const record = runs.start(
+          input,
+          (runId, runSignal) => runRlmEngine({ ...input, runId }, runSignal, input.async ? undefined : progress),
+          input.async ? undefined : signal,
+        );
 
         if (input.async) {
+          const disposition = record.status === "queued" ? "queued behind the active controller" : "started in background";
           return {
-            content: [{ type: "text", text: `RLM run started in background.\nrun_id: ${record.id}` }],
+            content: [{ type: "text", text: `RLM run ${disposition}.\nrun_id: ${record.id}` }],
             details: toRunDetails(record),
           };
         }
@@ -85,6 +90,10 @@ export default function extension(pi: ExtensionAPI): void {
       throw new Error(`Unsupported op: ${op}`);
     },
   });
+
+  pi.on("session_shutdown", async () => {
+    await runs.shutdown();
+  });
 }
 
 function resolveStartInput(params: RlmToolParams, cwd: string): StartRunInput {
@@ -99,10 +108,10 @@ function resolveStartInput(params: RlmToolParams, cwd: string): StartRunInput {
     model: params.model ?? "openai-codex/gpt-5.4",
     subModel: params.subModel ?? "openai-codex/gpt-5.3-codex-spark",
     mode: params.mode ?? "auto",
-    maxDepth: params.maxDepth ?? 2,
-    maxNodes: params.maxNodes ?? 24,
-    maxBranching: params.maxBranching ?? 4,
-    concurrency: params.concurrency ?? 2,
+    maxDepth: params.maxDepth ?? 1,
+    maxNodes: params.maxNodes ?? 4,
+    maxBranching: params.maxBranching ?? 2,
+    concurrency: params.concurrency ?? 1,
     maxIterations: params.maxIterations ?? 6,
     maxChunkChars: params.maxChunkChars ?? 40000,
     grepLimit: params.grepLimit ?? 20,
@@ -126,8 +135,9 @@ function describeRecord(record: RunRecord): string {
     `model: ${record.input.model}`,
     `sub_model: ${record.input.subModel}`,
   ];
-  if (record.finishedAt) lines.push(`duration_ms: ${record.finishedAt - record.startedAt}`);
+  if (record.finishedAt && record.startedAt) lines.push(`duration_ms: ${record.finishedAt - record.startedAt}`);
   if (record.error) lines.push(`error: ${record.error}`);
+  if (!record.result) lines.push(`artifacts: ${record.artifactsDir}`);
   if (record.result) {
     lines.push(`artifacts: ${record.result.artifacts.dir}`);
     lines.push(`strategy: ${summarizeStrategy(record.result)}`);
@@ -238,11 +248,19 @@ function toRunDetails(record: RunRecord): Record<string, unknown> {
     contract_version: "rlm.v1",
     run_id: record.id,
     status: record.status,
-    input: record.input,
+    artifacts_dir: record.artifactsDir,
+    input: publicInput(record.input),
     created_at: record.createdAt,
     started_at: record.startedAt,
     finished_at: record.finishedAt,
     error: record.error,
+  };
+}
+
+function publicInput(input: StartRunInput): Record<string, unknown> {
+  return {
+    ...input,
+    context: input.context === undefined ? undefined : `[inline context: ${input.context.length} chars]`,
   };
 }
 

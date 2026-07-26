@@ -2,6 +2,7 @@ export type RlmBackend = "cli" | "tmux";
 export type RlmOp = "start" | "status" | "wait" | "cancel";
 export type RlmMode = "auto" | "solve" | "decompose";
 export type RlmContextKind = "text" | "files" | "csv" | "json" | "parquet";
+export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
 
 export interface StartRunInput {
   task: string;
@@ -87,9 +88,10 @@ export interface RlmRunResult {
 export interface RunRecord {
   id: string;
   createdAt: number;
-  startedAt: number;
+  startedAt?: number;
   finishedAt?: number;
-  status: "running" | "completed" | "failed" | "cancelled";
+  status: RunStatus;
+  artifactsDir: string;
   input: StartRunInput;
   result?: RlmRunResult;
   error?: string;

@@ -28,22 +28,27 @@ plus skill frontmatter.
 
 - `goals` — Codex-style `/goals` and `/goal` session goal loop
   extension.
-- `rlm` — Recursive long-context tool with `r_eval` backed by system
-  `Rscript`, configurable R library paths, and DuckDB-backed parquet
-  loading through Node.
+- `rlm` — Single-controller long-context tool with externalized
+  inspection, bounded opt-in recursion, system `Rscript` evaluation, and
+  DuckDB-backed parquet sampling.
 
-### Subagents
+### Orchestration discipline
 
-This package no longer ships a homegrown subagent/scout/plan/recon
-implementation. Use the maintained package instead:
+This package does not ship a subagent/scout/plan/recon swarm and does
+not create worktrees. The RLM keeps long context outside the model and
+uses one controller to inspect it. Its default `auto` mode does not
+recurse; `mode=decompose` is an explicit, shallow, budgeted exception
+for materially independent contradictions.
 
-``` sh
-pi install npm:pi-subagents
-```
+Only one RLM run and one child model process are active at a time; at
+most four active/queued runs are retained. Additional background runs
+and recursive children queue. This serialization is a hard safety
+boundary, not a tuning default.
 
-That package already covers the runtime details we do not want to
-duplicate: child boundaries, fresh/fork context, async status,
-artifacts, worktrees, acceptance gates, and management commands.
+Inline context is capped at 5M characters. Eager text files are capped
+at 20MB and eager CSV/JSON files at 10MB. Directory contexts keep a
+Git-aware manifest of up to 20,000 files, eagerly load at most 5MB of
+prioritized text, and expose bounded lazy reads for omitted text files.
 
 ### Skills
 
@@ -117,11 +122,24 @@ artifacts, worktrees, acceptance gates, and management commands.
   checks, browser-runtime constraints, and package-vs-runtime
   distinctions. Use when debugging DuckHTS in webR, browser wasm, or
   duckdb-wasm environments.
+- `ducknng-development` — Guides development in the ducknng pure-C
+  DuckDB extension: registry-derived RPC manifests, NNG/HTTP/WebSocket
+  carrier boundaries, Arrow IPC and Quack payloads, explicit
+  service/session/AIO lifetime, bounded security contracts, stable and
+  unstable DuckDB API audits, SQL/property/browser/interop tests, and
+  generated function catalogs. Use when working in
+  sounkou-bioinfo/ducknng.
 - `duckqc-design` — Guides design of a DuckDB-native, SQL-first
   sequencing QC system inspired by RustQC and related upstream tools,
   with one-pass analytics, reusable kernels, compatibility outputs, and
   careful threading and summary design. Use when planning DuckQC-style
   functionality.
+- `ducktinycc-development` — Guides development in DuckTinyCC: in-memory
+  TinyCC state and relocated artifact lifetime, generated scalar-UDF
+  wrappers, recursive DuckDB/C descriptors, embedded runtime assets,
+  trusted native-code boundaries, allocator domains, SQL stability,
+  source-split conventions, upstream precedents, and extension/community
+  tests. Use when working in sounkou-bioinfo/DuckTinyCC.
 - `duckvep-design` — Guides design of a DuckDB-native variant effect
   prediction system, including consequence prediction kernels,
   transcript/annotation caches, haplotype-aware consequence paths,
@@ -142,10 +160,35 @@ artifacts, worktrees, acceptance gates, and management commands.
   workflows such as Makefiles, tinytest, roxygen2, base R, and optional
   tools like usethis, pkgdown, air, or jarl. Use when working on any R
   package or CRAN-style package workflow.
+- `rducks-development` — Guides development in the Rducks R package and
+  bundled DuckDB C extension, including strict execution plans, R-thread
+  and SEXP ownership, direct versus Quack/NNG worker marshalling, exact
+  DuckDB unstable-ABI artifacts, runtime capability probes, generated
+  catalogs, wasm, and tarball-based tinytest/check workflows. Use when
+  working in sounkou-bioinfo/Rducks.
+- `rfmalloc-development` — Guides development in the Rfmalloc monorepo
+  and its Rfmalloc, Rggml, Rgguf, Rllm, Rpgen, and RfmallocStatgen
+  packages: typed out-of-core storage, C-callable contracts, backend
+  fallback, generated GGML vendoring, architecture programs, numerical
+  oracles, cross-package checks, and GPU-rig evidence. Use when working
+  in sounkou-bioinfo/Rfmalloc.
+- `rho-development` — Guides development in the RGenomicsETL/Rho
+  monorepo: evidence-driven dialectical refinement, modern R and
+  functional S7 OOP, s7contract interfaces, asynchronous tasks and
+  streams, explicit capabilities, provider and session protocols,
+  authored Rmd tests, and monorepo gates. Use when working in Rho or its
+  rho.\* packages.
 - `s7-development` — Guides development of R code and packages using S7
   classes, generics, methods, validators, properties, compatibility
   layers, and package integration. Use when designing or maintaining
   S7-based APIs or migrating S3/S4 code toward S7.
+- `sounkou-engineering-style` — Applies the working and coding style
+  used across sounkou-bioinfo and RGenomicsETL projects: one-controller
+  conceptual control without agent/worktree sprawl, evidence-driven
+  dialectical design, one semantic authority, explicit C ownership and
+  bounds, idiomatic R and S7, composable SQL, focused changes, and
+  executable proof. Use when working in DuckHTS, Rducks, Rfmalloc,
+  ducknng, DuckTinyCC, Rho, or when the user asks for “our style”.
 
 ## RLM and R runtime direction
 
@@ -157,13 +200,14 @@ artifacts, worktrees, acceptance gates, and management commands.
   `https://cloud.r-project.org`)
 
 Inside `r_eval`, use `install_r_packages()`, `context_load()`,
-`context_r_load_code()`, `save_plot()`, `rlm_call()`, `FINAL()`, and
-`FINAL_VAR()`.
+`context_r_load_code()`, `save_plot()`, `FINAL()`, and `FINAL_VAR()`.
+`rlm_call()` is available only when recursion was explicitly enabled
+with `mode=decompose`.
 
-Parquet context is loaded through `@duckdb/node-api`, which lines up
+Parquet context is sampled through `@duckdb/node-api`; full analysis
+remains available through `context_load()` in system R. This lines up
 with the DuckDB-native direction for DuckHTS, `ducknng`, and
-`ducktinycc`. DuckHTS stays the first target for deeper runtime
-integration.
+`ducktinycc` without eagerly retaining an entire Parquet table in Node.
 
 The longer-term worker design is tracked in
 `docs/rlm-r-nng-arrow-design.md`: persistent system-R workers over
@@ -174,6 +218,7 @@ NNG/nanoarrow, with DuckDB extensions as first-class runtime peers.
 ``` sh
 npm install
 npm run typecheck
+npm run test:rlm
 npm run render:readme
 ```
 

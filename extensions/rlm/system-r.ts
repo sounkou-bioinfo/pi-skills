@@ -8,6 +8,7 @@ import { rLoadCodeForContext, type ReplContext } from "./repl.js";
 const rlmSignalPrefix = "__PI_RLM_SIGNAL__";
 const resultMarker = "__PI_RLM_RESULT__";
 const defaultRRepo = "https://cloud.r-project.org";
+const maxROutputChars = 1_000_000;
 
 export interface RCallResult {
   result?: string;
@@ -24,6 +25,7 @@ export interface EvalWithROptions {
   rBin?: string;
   rLibPaths?: string[];
   rRepos?: string;
+  signal?: AbortSignal;
 }
 
 export interface EvalWithRResult {
@@ -67,6 +69,7 @@ export async function createRSession(
   const rBin = options.rBin ?? process.env.PI_RLM_R_BIN ?? "Rscript";
   const rLibPaths = options.rLibPaths ?? parseRLibPathsEnv(process.env.PI_RLM_R_LIBS);
   const rRepos = options.rRepos ?? process.env.PI_RLM_R_REPOS ?? defaultRRepo;
+  const signal = options.signal;
 
   const tempDir = await fs.mkdtemp(join(tmpdir(), `pi-rlm-r-${sanitizeScopeId(scopeId)}-`));
   const statePath = join(tempDir, "session.RData");
@@ -88,25 +91,26 @@ export async function createRSession(
           statePath,
           setupCode: buildSessionSetup({ context, prepared, artifactDir: artifactDir ?? "", rLibPaths, rRepos }),
           evalCode: buildEvaluationCode(code, callResults),
+          signal,
         });
-        const signal = parseRlmSignal(rawResult.resultText.trim());
-        if (!signal) {
+        const rlmSignal = parseRlmSignal(rawResult.resultText.trim());
+        if (!rlmSignal) {
           return {
             output: await appendArtifactSummary(artifactDir, combineStdoutAndResult(rawResult.stdoutBeforeMarker, rawResult.resultText), exportedArtifacts),
             signaledFinal: false,
             recursiveCalls: callResults.length,
           };
         }
-        if (signal.kind === "final") {
+        if (rlmSignal.kind === "final") {
           return {
-            output: await appendArtifactSummary(artifactDir, formatSignalPayload(signal.payload), exportedArtifacts),
+            output: await appendArtifactSummary(artifactDir, formatSignalPayload(rlmSignal.payload), exportedArtifacts),
             signaledFinal: true,
             recursiveCalls: callResults.length,
           };
         }
-        if (signal.kind !== "call") {
+        if (rlmSignal.kind !== "call") {
           return {
-            output: `R error: unsupported RLM signal kind ${signal.kind}`,
+            output: `R error: unsupported RLM signal kind ${rlmSignal.kind}`,
             signaledFinal: false,
             recursiveCalls: callResults.length,
           };
@@ -125,7 +129,7 @@ export async function createRSession(
             recursiveCalls: callResults.length,
           };
         }
-        const payload = isRecord(signal.payload) ? signal.payload : {};
+        const payload = isRecord(rlmSignal.payload) ? rlmSignal.payload : {};
         const task = typeof payload.task === "string" ? payload.task : "";
         if (!task) {
           return {
@@ -361,13 +365,14 @@ interface RunEvaluationInput {
   statePath: string;
   setupCode: string;
   evalCode: string;
+  signal?: AbortSignal;
 }
 
 async function runEvaluation(input: RunEvaluationInput): Promise<{ stdoutBeforeMarker: string; resultText: string }> {
   const scriptPath = join(input.tempDir, `eval-${Date.now()}-${Math.random().toString(36).slice(2)}.R`);
   const script = buildRScript(input.statePath, input.setupCode, input.evalCode);
   await fs.writeFile(scriptPath, script, { encoding: "utf8", mode: 0o600 });
-  const { code, stdout, stderr } = await spawnR(input.rBin, scriptPath);
+  const { code, stdout, stderr } = await spawnR(input.rBin, scriptPath, input.signal);
   try {
     await fs.unlink(scriptPath);
   } catch {
@@ -410,25 +415,44 @@ function buildRScript(statePath: string, setupCode: string, evalCode: string): s
   ].join("\n");
 }
 
-function spawnR(rBin: string, scriptPath: string): Promise<{ code: number; stdout: string; stderr: string }> {
+function spawnR(rBin: string, scriptPath: string, signal?: AbortSignal): Promise<{ code: number; stdout: string; stderr: string }> {
   const lower = basename(rBin).toLowerCase();
   const args = lower === "r" || lower === "r.exe" ? ["--vanilla", "--slave", "-f", scriptPath] : ["--vanilla", scriptPath];
   return new Promise((resolve) => {
     const proc = spawn(rBin, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    let killTimer: NodeJS.Timeout | undefined;
+    const append = (current: string, addition: string) => current.length >= maxROutputChars ? current : current + addition.slice(0, maxROutputChars - current.length);
+    const kill = () => {
+      proc.kill("SIGTERM");
+      killTimer = setTimeout(() => proc.kill("SIGKILL"), 5000);
+      killTimer.unref();
+    };
+    const finish = (result: { code: number; stdout: string; stderr: string }) => {
+      if (settled) return;
+      settled = true;
+      if (killTimer) clearTimeout(killTimer);
+      if (signal) signal.removeEventListener("abort", kill);
+      resolve(result);
+    };
     proc.stdout.on("data", (data) => {
-      stdout += data.toString();
+      stdout = append(stdout, data.toString());
     });
     proc.stderr.on("data", (data) => {
-      stderr += data.toString();
+      stderr = append(stderr, data.toString());
     });
     proc.on("error", (error) => {
-      resolve({ code: 1, stdout, stderr: `${stderr}${stderr ? "\n" : ""}${error.message}` });
+      finish({ code: 1, stdout, stderr: `${stderr}${stderr ? "\n" : ""}${error.message}` });
     });
-    proc.on("close", (code) => {
-      resolve({ code: code ?? 0, stdout, stderr });
+    proc.on("close", (code, closeSignal) => {
+      finish({ code: signal?.aborted ? 130 : closeSignal ? 128 : (code ?? 1), stdout, stderr });
     });
+    if (signal) {
+      if (signal.aborted) kill();
+      else signal.addEventListener("abort", kill, { once: true });
+    }
   });
 }
 

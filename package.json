@@ -25,6 +25,7 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test:rlm": "rm -rf .rlm-test-build && tsc --noEmit false --outDir .rlm-test-build --declaration false && node --test .rlm-test-build/rlm/rlm.test.js; status=$?; rm -rf .rlm-test-build; exit $status",
     "render:readme": "Rscript scripts/render_readme.R",
     "check:readme": "Rscript scripts/render_readme.R --check"
   },

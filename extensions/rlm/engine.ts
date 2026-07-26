@@ -1,10 +1,12 @@
 import { DuckDBConnection } from "@duckdb/node-api";
+import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { basename, extname, join, relative, resolve, sep } from "node:path";
+import { promisify } from "node:util";
 import { completeWithCli } from "./backends.js";
 import { plannerPrompt, solverPrompt, synthesisPrompt } from "./prompts.js";
-import { evalInRepl, type ReplContext } from "./repl.js";
+import { evalInRepl, type ReplContext, type ReplFileEntry } from "./repl.js";
 import { startTmuxVisualizer } from "./tmux.js";
 import type { RlmAction, RlmContextKind, RlmNode, RlmObservation, RlmRunResult, RunArtifacts, StartRunInput } from "./types.js";
 import { chunkText, extractFirstJsonObject, grepText, normalizeTask, safeJsonParse, shortText } from "./utils.js";
@@ -20,7 +22,7 @@ interface EngineState {
   maxDepthSeen: number;
 }
 
-type FileEntry = { path: string; text: string };
+type FileEntry = ReplFileEntry;
 type CsvRow = Record<string, string>;
 
 type ResolvedContext =
@@ -30,9 +32,28 @@ type ResolvedContext =
   | { kind: "json"; label: string; value: unknown }
   | { kind: "parquet"; label: string; path: string; columns: string[]; rows: Array<Record<string, unknown>> };
 
-const DEFAULT_IGNORED_DIRS = new Set([".git", "node_modules", "dist", "build", "coverage", ".next", ".turbo"]);
-const MAX_FILE_CONTEXT_FILES = 2000;
+const DEFAULT_IGNORED_DIRS = new Set([
+  ".git",
+  ".cache",
+  ".next",
+  ".Rcheck",
+  ".Rproj.user",
+  ".turbo",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules",
+  "target",
+]);
+const MAX_FILE_MANIFEST_FILES = 20_000;
 const MAX_FILE_CONTEXT_BYTES = 5_000_000;
+const MAX_SINGLE_FILE_BYTES = 500_000;
+const MAX_TEXT_CONTEXT_BYTES = 20_000_000;
+const MAX_STRUCTURED_CONTEXT_BYTES = 10_000_000;
+const BINARY_EXTENSIONS = new Set([
+  ".7z", ".a", ".avi", ".bmp", ".bz2", ".class", ".db", ".dll", ".dylib", ".feather", ".gif", ".gz", ".ico", ".jar", ".jpeg", ".jpg", ".mp3", ".mp4", ".o", ".obj", ".parquet", ".pdf", ".png", ".pyc", ".rds", ".rdata", ".so", ".tar", ".tgz", ".ttf", ".wasm", ".webp", ".woff", ".woff2", ".xz", ".zip",
+]);
+const execFileAsync = promisify(execFile);
 
 class NodeEnvironment {
   constructor(readonly context: ResolvedContext, readonly maxChunkChars: number, readonly grepLimit: number) {}
@@ -42,8 +63,9 @@ class NodeEnvironment {
       case "text":
         return `kind=text; chars=${this.context.text.length}; capabilities=peek,grep,sample_chunks,map_chunks,decompose,repl_eval,r_eval,solve`;
       case "files": {
-        const totalChars = this.context.files.reduce((sum, file) => sum + file.text.length, 0);
-        return `kind=files; root=${this.context.root}; files=${this.context.files.length}; chars=${totalChars}; capabilities=peek,grep,sample_chunks,map_chunks,decompose,repl_eval,solve`;
+        const loaded = this.context.files.filter((file) => file.text !== undefined);
+        const totalChars = loaded.reduce((sum, file) => sum + (file.text?.length ?? 0), 0);
+        return `kind=files; root=${this.context.root}; manifest_files=${this.context.files.length}; loaded_files=${loaded.length}; loaded_chars=${totalChars}; capabilities=peek,grep,sample_chunks,repl_eval,solve; recursion requires mode=decompose`;
       }
       case "csv":
         return `kind=csv; rows=${this.context.rows.length}; columns=${this.context.columns.length}; capabilities=peek,grep,sample_chunks,map_chunks,decompose,repl_eval,r_eval,solve`;
@@ -63,7 +85,7 @@ class NodeEnvironment {
       case "text":
         return context.text.length;
       case "files":
-        return context.files.reduce((sum, file) => sum + file.text.length, 0);
+        return context.files.reduce((sum, file) => sum + (file.text?.length ?? 0), 0);
       case "csv":
         return context.text.length;
       case "json":
@@ -78,7 +100,9 @@ class NodeEnvironment {
       case "text":
         return context.text;
       case "files":
-        return context.files.map((file) => `${file.path} (${file.text.length} chars)`).join("\n");
+        return context.files
+          .map((file) => `${file.path} (${file.size} bytes; ${file.text !== undefined ? "loaded" : `not loaded: ${file.omittedReason ?? "unknown"}`})`)
+          .join("\n");
       case "csv":
         return renderCsvContext(context);
       case "json":
@@ -156,15 +180,23 @@ class NodeEnvironment {
   renderContextForModel(context = this.context): string {
     switch (context.kind) {
       case "text":
-        return context.text;
-      case "files":
-        return context.files.map((file) => `===== FILE: ${file.path} =====\n${file.text}`).join("\n\n");
+        return shortText(context.text, this.maxChunkChars);
+      case "files": {
+        const manifestBudget = Math.min(12_000, Math.floor(this.maxChunkChars / 3));
+        const manifest = shortText(this.manifestText(context), manifestBudget);
+        const loaded = context.files
+          .filter((file) => file.text !== undefined)
+          .map((file) => `===== FILE: ${file.path} =====\n${file.text}`)
+          .join("\n\n");
+        const contentBudget = Math.max(500, this.maxChunkChars - manifest.length - 64);
+        return `===== FILE MANIFEST =====\n${manifest}\n\n${shortText(loaded, contentBudget)}`;
+      }
       case "csv":
-        return renderCsvContext(context);
+        return shortText(renderCsvContext(context), this.maxChunkChars);
       case "json":
-        return JSON.stringify(context.value, null, 2) ?? "null";
+        return shortText(JSON.stringify(context.value, null, 2) ?? "null", this.maxChunkChars);
       case "parquet":
-        return renderParquetContext(context);
+        return shortText(renderParquetContext(context), this.maxChunkChars);
     }
   }
 
@@ -186,24 +218,36 @@ class NodeEnvironment {
 
 type ProgressFn = (line: string) => void;
 
-export async function runRlmEngine(input: EngineInput, signal?: AbortSignal, progress?: ProgressFn): Promise<RlmRunResult> {
+export async function runRlmEngine(input: EngineInput, parentSignal?: AbortSignal, progress?: ProgressFn): Promise<RlmRunResult> {
   const startedAt = Date.now();
+  const timeoutSignal = AbortSignal.timeout(input.timeoutMs);
+  const signal = parentSignal ? AbortSignal.any([parentSignal, timeoutSignal]) : timeoutSignal;
   const artifacts = await createArtifacts(input.runId);
   const log = createEventLogger(artifacts.eventsPath);
   const state: EngineState = { nodeCounter: 0, nodesVisited: 0, maxDepthSeen: 0 };
   const context = await resolveContext(input);
   const visualizerSession = input.backend === "tmux" ? await startTmuxVisualizer(input.runId, artifacts.eventsPath, artifacts.treePath, artifacts.outputPath) : undefined;
 
-  log("run_start", { runId: input.runId, task: input.task, contextKind: context.kind, input, visualizerSession });
+  log("run_start", {
+    runId: input.runId,
+    task: input.task,
+    contextKind: context.kind,
+    input: { ...input, context: input.context === undefined ? undefined : `[inline context: ${input.context.length} chars]` },
+    visualizerSession,
+  });
   progress?.(`RLM run ${input.runId} started; kind=${context.kind}; size=${summarizeContextSize(context)}`);
   if (visualizerSession) progress?.(`tmux visualizer: ${visualizerSession}`);
 
   try {
     const root = await runNode({ task: input.task, depth: 0, lineage: [], parentId: undefined, context });
     if (visualizerSession) root.visualizerSession = visualizerSession;
-    const finalOutput = root.result ?? "(no final output)";
+    const finalOutput = root.result ?? root.error ?? "(no final output)";
     await fs.writeFile(artifacts.treePath, JSON.stringify(root, null, 2), "utf8");
     await fs.writeFile(artifacts.outputPath, finalOutput, "utf8");
+    if (root.status !== "completed") {
+      const reason = signal.aborted ? `RLM run exceeded timeout or was cancelled (${input.timeoutMs}ms)` : root.error ?? `root node ended with status=${root.status}`;
+      throw new Error(reason);
+    }
     const durationMs = Date.now() - startedAt;
     const result: RlmRunResult = {
       runId: input.runId,
@@ -316,22 +360,30 @@ export async function runRlmEngine(input: EngineInput, signal?: AbortSignal, pro
             rBin: input.rBin,
             rLibPaths: input.rLibPaths,
             rRepos: input.rRepos,
-            callRlm: async (task, subcontext, contextKind) => {
-              const child = await runNode({
-                task,
-                depth: params.depth + 1,
-                lineage: [...params.lineage, normalizeTask(params.task)],
-                parentId: nodeId,
-                context: coerceRequestedSubcontext(subcontext, contextKind, params.context),
-              });
-              node.children.push(child);
-              return {
-                result: child.result,
-                error: child.error,
-                contextKind: child.contextKind,
-                strategy: child.decision?.action,
-              };
-            },
+            signal,
+            callRlm:
+              input.mode === "decompose"
+                ? async (task, subcontext, contextKind) => {
+                    if (params.depth >= input.maxDepth || state.nodesVisited >= input.maxNodes) {
+                      return { error: "recursive node budget exhausted" };
+                    }
+                    const child = await runNode({
+                      task,
+                      depth: params.depth + 1,
+                      lineage: [...params.lineage, normalizeTask(params.task)],
+                      parentId: nodeId,
+                      context: coerceRequestedSubcontext(subcontext, contextKind, params.context),
+                    });
+                    node.children.push(child);
+                    return {
+                      result: child.result,
+                      error: child.error,
+                      contextKind: child.contextKind,
+                      strategy: child.decision?.action,
+                    };
+                  }
+                : undefined,
+            maxRecursiveCalls: Math.max(1, Math.min(input.maxBranching, input.maxNodes - state.nodesVisited)),
           });
           const evalResult = await rSession.eval(code);
           addObservation(node, "note", `r_eval =>\n${shortText(evalResult.output, 6000)}`);
@@ -354,30 +406,45 @@ export async function runRlmEngine(input: EngineInput, signal?: AbortSignal, pro
             addObservation(node, "note", "repl_eval requested without code");
             continue;
           }
-          const output = await evalInRepl(code, env.asReplContext(), {
-            callRlm: async (task, subcontext) => {
-              const child = await runNode({
-                task,
-                depth: params.depth + 1,
-                lineage: [...params.lineage, normalizeTask(params.task)],
-                parentId: nodeId,
-                context: coerceSubcontext(subcontext, params.context),
-              });
-              node.children.push(child);
-              return {
-                result: child.result,
-                error: child.error,
-                contextKind: child.contextKind,
-                strategy: child.decision?.action,
-              };
-            },
-          });
+          const output = await evalInRepl(
+            code,
+            env.asReplContext(),
+            input.mode === "decompose"
+              ? {
+                  signal,
+                  callRlm: async (task, subcontext) => {
+                    if (params.depth >= input.maxDepth || state.nodesVisited >= input.maxNodes) {
+                      return { error: "recursive node budget exhausted" };
+                    }
+                    const child = await runNode({
+                      task,
+                      depth: params.depth + 1,
+                      lineage: [...params.lineage, normalizeTask(params.task)],
+                      parentId: nodeId,
+                      context: coerceSubcontext(subcontext, params.context),
+                    });
+                    node.children.push(child);
+                    return {
+                      result: child.result,
+                      error: child.error,
+                      contextKind: child.contextKind,
+                      strategy: child.decision?.action,
+                    };
+                  },
+                }
+              : { signal },
+          );
           addObservation(node, "note", `repl_eval =>\n${shortText(output, 6000)}`);
           continue;
         }
 
         if (action.action === "decompose") {
-          const subtasks = (action.subtasks ?? []).filter(Boolean).slice(0, input.maxBranching);
+          if (input.mode !== "decompose") {
+            addObservation(node, "note", "recursive decomposition is disabled in mode=auto; inspect evidence with repl_eval/r_eval, then answer with final or solve");
+            continue;
+          }
+          const availableNodes = Math.max(0, input.maxNodes - state.nodesVisited);
+          const subtasks = (action.subtasks ?? []).filter(Boolean).slice(0, Math.min(input.maxBranching, availableNodes));
           if (subtasks.length >= 2) {
             const childResults = await mapConcurrent(subtasks, input.concurrency, (subtask) =>
               runNode({
@@ -399,7 +466,12 @@ export async function runRlmEngine(input: EngineInput, signal?: AbortSignal, pro
         }
 
         if (action.action === "map_chunks") {
-          const chunks = env.chunk(action.chunkSize).slice(0, input.maxBranching);
+          if (input.mode !== "decompose") {
+            addObservation(node, "note", "recursive chunk mapping is disabled in mode=auto; sample or inspect chunks with the REPL instead");
+            continue;
+          }
+          const availableNodes = Math.max(0, input.maxNodes - state.nodesVisited);
+          const chunks = env.chunk(action.chunkSize).slice(0, Math.min(input.maxBranching, availableNodes));
           if (chunks.length >= 2) {
             const childTask = action.subtaskPrompt || params.task;
             const childResults = await mapConcurrent(chunks, input.concurrency, (chunk, index) =>
@@ -454,6 +526,7 @@ export async function runRlmEngine(input: EngineInput, signal?: AbortSignal, pro
       maxChunkChars: input.maxChunkChars,
       grepLimit: input.grepLimit,
       environmentSummary: env.describe(),
+      recursionAllowed: input.mode === "decompose",
     });
     const result = await completeWithCli({
       model: input.model,
@@ -540,20 +613,40 @@ async function resolveContext(input: StartRunInput): Promise<ResolvedContext> {
     return { kind: "files", label: root, root, files };
   }
   if (inferredKind === "csv") {
-    const text = input.context !== undefined ? input.context : input.contextPath ? await fs.readFile(resolve(input.cwd, input.contextPath), "utf8") : "";
+    const text = input.context !== undefined
+      ? boundedInlineContext(input.context, MAX_STRUCTURED_CONTEXT_BYTES, "CSV")
+      : input.contextPath
+        ? await readBoundedUtf8(resolve(input.cwd, input.contextPath), MAX_STRUCTURED_CONTEXT_BYTES, "CSV")
+        : "";
     return parseCsvContext(text, input.contextPath ?? "inline-csv");
   }
   if (inferredKind === "json") {
-    const text = input.context !== undefined ? input.context : input.contextPath ? await fs.readFile(resolve(input.cwd, input.contextPath), "utf8") : "null";
+    const text = input.context !== undefined
+      ? boundedInlineContext(input.context, MAX_STRUCTURED_CONTEXT_BYTES, "JSON")
+      : input.contextPath
+        ? await readBoundedUtf8(resolve(input.cwd, input.contextPath), MAX_STRUCTURED_CONTEXT_BYTES, "JSON")
+        : "null";
     return parseJsonContext(text, input.contextPath ?? "inline-json");
   }
   if (inferredKind === "parquet") {
     if (!input.contextPath) throw new Error("contextKind=parquet requires contextPath");
     return loadParquetContext(resolve(input.cwd, input.contextPath), input.contextPath);
   }
-  if (input.context !== undefined) return { kind: "text", label: "inline", text: input.context };
-  if (input.contextPath) return { kind: "text", label: input.contextPath, text: await fs.readFile(resolve(input.cwd, input.contextPath), "utf8") };
+  if (input.context !== undefined) return { kind: "text", label: "inline", text: boundedInlineContext(input.context, MAX_TEXT_CONTEXT_BYTES, "text") };
+  if (input.contextPath) return { kind: "text", label: input.contextPath, text: await readBoundedUtf8(resolve(input.cwd, input.contextPath), MAX_TEXT_CONTEXT_BYTES, "text") };
   return { kind: "text", label: "empty", text: "" };
+}
+
+function boundedInlineContext(text: string, maxBytes: number, label: string): string {
+  const bytes = Buffer.byteLength(text);
+  if (bytes > maxBytes) throw new Error(`${label} context is ${bytes} bytes; maximum is ${maxBytes}. Use a file directory or Parquet context instead of one eager value.`);
+  return text;
+}
+
+async function readBoundedUtf8(fullPath: string, maxBytes: number, label: string): Promise<string> {
+  const stat = await fs.stat(fullPath);
+  if (stat.size > maxBytes) throw new Error(`${label} context file is ${stat.size} bytes; maximum is ${maxBytes}. Use a file directory or Parquet context instead of one eager value.`);
+  return fs.readFile(fullPath, "utf8");
 }
 
 async function inferContextKind(contextPath: string, cwd: string): Promise<RlmContextKind> {
@@ -566,35 +659,111 @@ async function inferContextKind(contextPath: string, cwd: string): Promise<RlmCo
   return "text";
 }
 
-async function loadFileContext(root: string): Promise<FileEntry[]> {
+export async function loadFileContext(root: string): Promise<FileEntry[]> {
+  const discovered = await discoverFilePaths(root);
+  const ordered = discovered
+    .sort((a, b) => filePriority(a) - filePriority(b) || a.localeCompare(b))
+    .slice(0, MAX_FILE_MANIFEST_FILES);
   const files: FileEntry[] = [];
-  let totalBytes = 0;
+  let loadedBytes = 0;
 
-  async function walk(dir: string): Promise<void> {
-    if (files.length >= MAX_FILE_CONTEXT_FILES || totalBytes >= MAX_FILE_CONTEXT_BYTES) return;
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (files.length >= MAX_FILE_CONTEXT_FILES || totalBytes >= MAX_FILE_CONTEXT_BYTES) return;
-      const fullPath = join(dir, entry.name);
-      const relPath = relative(root, fullPath) || entry.name;
-      if (entry.isDirectory()) {
-        if (DEFAULT_IGNORED_DIRS.has(entry.name)) continue;
-        await walk(fullPath);
+  const resolvedRoot = resolve(root);
+  for (const relPath of ordered) {
+    const fullPath = join(resolvedRoot, relPath);
+    try {
+      let readablePath = fullPath;
+      let stat = await fs.lstat(fullPath);
+      if (stat.isSymbolicLink()) {
+        readablePath = await fs.realpath(fullPath);
+        if (readablePath !== resolvedRoot && !readablePath.startsWith(`${resolvedRoot}${sep}`)) {
+          files.push({ path: relPath, size: stat.size, omittedReason: "unreadable" });
+          continue;
+        }
+        stat = await fs.stat(readablePath);
+      }
+      const size = stat.size;
+      if (!stat.isFile()) {
+        files.push({ path: relPath, size, omittedReason: "unreadable" });
         continue;
       }
-      if (!entry.isFile()) continue;
-      try {
-        const text = await fs.readFile(fullPath, "utf8");
-        files.push({ path: relPath, text });
-        totalBytes += text.length;
-      } catch {
-        // ignore non-text or unreadable files
+      if (BINARY_EXTENSIONS.has(extname(relPath).toLowerCase())) {
+        files.push({ path: relPath, size, omittedReason: "binary" });
+        continue;
       }
+      if (size > MAX_SINGLE_FILE_BYTES) {
+        files.push({ path: relPath, size, omittedReason: "too_large" });
+        continue;
+      }
+      if (loadedBytes + size > MAX_FILE_CONTEXT_BYTES) {
+        files.push({ path: relPath, size, omittedReason: "content_budget" });
+        continue;
+      }
+      const data = await fs.readFile(readablePath);
+      if (data.includes(0)) {
+        files.push({ path: relPath, size: data.length, omittedReason: "binary" });
+        continue;
+      }
+      files.push({ path: relPath, size: data.length, text: data.toString("utf8") });
+      loadedBytes += data.length;
+    } catch {
+      files.push({ path: relPath, size: 0, omittedReason: "unreadable" });
     }
   }
 
+  return files;
+}
+
+async function discoverFilePaths(root: string): Promise<string[]> {
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."],
+      { encoding: "utf8", maxBuffer: 20_000_000 },
+    );
+    const paths = String(stdout).split("\0").filter(Boolean);
+    if (paths.length > 0) return Array.from(new Set(paths));
+  } catch {
+    // Fall back to a deterministic filesystem walk outside Git repositories.
+  }
+
+  const paths: string[] = [];
+  async function walk(dir: string): Promise<void> {
+    if (paths.length >= MAX_FILE_MANIFEST_FILES) return;
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      if (paths.length >= MAX_FILE_MANIFEST_FILES) return;
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!DEFAULT_IGNORED_DIRS.has(entry.name)) await walk(fullPath);
+      } else if (entry.isFile()) {
+        paths.push(relative(root, fullPath));
+      }
+    }
+  }
   await walk(root);
-  return files.sort((a, b) => a.path.localeCompare(b.path));
+  return paths;
+}
+
+function filePriority(filePath: string): number {
+  const normalized = filePath.replaceAll("\\", "/").toLowerCase();
+  const parts = normalized.split("/");
+  const name = basename(normalized);
+  const vendored =
+    parts.some((part) => [".claude", ".pi", ".sync", "bcftools", "deps", "htslib", "third_party", "vendor", "vendored"].includes(part)) ||
+    normalized.includes("/inst/duckhts_extension/");
+  if (vendored) return 9;
+  if (["agents.md", "claude.md", "style.md", "architecture.md", "design.md", "synthesis.md", "makefile", "cmakelists.txt", "description", "description.yml", "functions.yaml", "news.md", "package.json", "vcpkg.json"].includes(name)) return 0;
+  if (name.startsWith("readme") || parts.some((part) => ["docs", "design"].includes(part))) return 1;
+  if (parts[0] === "src" || (parts[0] === "r" && parts[2] === "r")) return 2;
+  if (["scripts", "test", "tests"].includes(parts[0])) return 3;
+  if (/\.(c|cc|cpp|h|hpp|r|rmd|sql|ts|tsx|js|json|ya?ml|toml|md)$/i.test(name)) return 4;
+  return 5;
 }
 
 function parseCsvContext(text: string, label: string): ResolvedContext {
@@ -621,7 +790,7 @@ function parseJsonContext(text: string, label: string): ResolvedContext {
 async function loadParquetContext(fullPath: string, label: string): Promise<ResolvedContext> {
   const connection = await DuckDBConnection.create();
   try {
-    const reader = await connection.runAndReadAll(`SELECT * FROM read_parquet(${sqlString(fullPath)})`);
+    const reader = await connection.runAndReadAll(`SELECT * FROM read_parquet(${sqlString(fullPath)}) LIMIT 1000`);
     const rows = reader.getRowObjectsJson() as Array<Record<string, unknown>>;
     const columns = inferColumns(rows.map((row) => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, String(v ?? "")]))));
     return { kind: "parquet", label, path: fullPath, columns, rows };
@@ -661,7 +830,7 @@ function coerceSubcontext(value: unknown, parent: ResolvedContext): ResolvedCont
     if (value.kind === "files" && Array.isArray(value.files)) {
       const files = value.files
         .filter((file): file is Record<string, unknown> => isRecord(file) && typeof file.path === "string" && typeof file.text === "string")
-        .map((file) => ({ path: String(file.path), text: String(file.text) }));
+        .map((file) => ({ path: String(file.path), size: Buffer.byteLength(String(file.text)), text: String(file.text) }));
       return { kind: "files", label: `${parent.label}#repl-files`, root: typeof value.root === "string" ? value.root : parent.kind === "files" ? parent.root : parent.label, files };
     }
     if (value.kind === "parquet" && Array.isArray(value.rows)) {
@@ -736,6 +905,7 @@ function grepFiles(files: FileEntry[], pattern: string, limit: number): string[]
   for (const file of files) {
     if (matches.length >= limit) break;
     if (regex.test(file.path)) matches.push(`${file.path}:<path>`);
+    if (file.text === undefined) continue;
     const lines = file.text.split(/\r?\n/);
     for (let i = 0; i < lines.length && matches.length < limit; i++) {
       if (regex.test(lines[i])) matches.push(`${file.path}:${i + 1}: ${lines[i]}`);
@@ -757,7 +927,7 @@ function chunkFileEntries(files: FileEntry[], maxChars: number): FileEntry[][] {
   let current: FileEntry[] = [];
   let currentChars = 0;
   for (const file of files) {
-    const cost = file.text.length + file.path.length + 64;
+    const cost = (file.text?.length ?? 0) + file.path.length + 64;
     if (current.length > 0 && currentChars + cost > maxChars) {
       groups.push(current);
       current = [];
@@ -849,8 +1019,10 @@ function summarizeContextSize(context: ResolvedContext): string {
   switch (context.kind) {
     case "text":
       return `${context.text.length} chars`;
-    case "files":
-      return `${context.files.length} files / ${context.files.reduce((sum, file) => sum + file.text.length, 0)} chars`;
+    case "files": {
+      const loaded = context.files.filter((file) => file.text !== undefined);
+      return `${context.files.length} manifest files / ${loaded.length} loaded / ${loaded.reduce((sum, file) => sum + (file.text?.length ?? 0), 0)} chars`;
+    }
     case "csv":
       return `${context.rows.length} rows / ${context.columns.length} columns`;
     case "json":
@@ -872,13 +1044,13 @@ async function createArtifacts(runId: string): Promise<RunArtifacts> {
 }
 
 function createEventLogger(eventsPath: string) {
-  const writes: Promise<void>[] = [];
+  let pending = Promise.resolve();
   const log = (type: string, details: Record<string, unknown>) => {
     const line = JSON.stringify({ ts: Date.now(), type, ...details }) + "\n";
-    writes.push(fs.appendFile(eventsPath, line, "utf8"));
+    pending = pending.then(() => fs.appendFile(eventsPath, line, "utf8"));
   };
   log.flush = async () => {
-    await Promise.allSettled(writes);
+    await pending.catch(() => undefined);
   };
   return log as ((type: string, details: Record<string, unknown>) => void) & { flush: () => Promise<void> };
 }
