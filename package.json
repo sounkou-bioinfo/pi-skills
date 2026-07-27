@@ -24,8 +24,10 @@
     "LICENSE"
   ],
   "scripts": {
+    "postinstall": "node scripts/patch_pi_background_tasks.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "npm run test:memory && npm run test:rlm",
+    "test": "npm run test:background-tasks && npm run test:memory && npm run test:rlm",
+    "test:background-tasks": "rm -rf .background-task-test-build && tsc --target ES2023 --module NodeNext --moduleResolution NodeNext --strict --skipLibCheck --esModuleInterop --types node --rootDir . --outDir .background-task-test-build scripts/test_pi_background_tasks_patch.ts node_modules/pi-background-tasks/src/core/common.ts node_modules/pi-background-tasks/src/core/registry.ts && node .background-task-test-build/scripts/test_pi_background_tasks_patch.js; status=$?; rm -rf .background-task-test-build; exit $status",
     "test:memory": "rm -rf .memory-test-build && tsc --noEmit false --outDir .memory-test-build --declaration false && cp extensions/memory/*.sql .memory-test-build/memory/ && node --test .memory-test-build/memory/memory.test.js; status=$?; rm -rf .memory-test-build; exit $status",
     "test:rlm": "rm -rf .rlm-test-build && tsc --noEmit false --outDir .rlm-test-build --declaration false && node --test .rlm-test-build/rlm/rlm.test.js; status=$?; rm -rf .rlm-test-build; exit $status",
     "render:readme": "Rscript scripts/render_readme.R",

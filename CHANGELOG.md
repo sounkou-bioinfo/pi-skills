@@ -12,7 +12,10 @@
   Victor Taelin's OptMem for the independently implemented append-only,
   bounded fading-detail, navigable-summary concepts.
 - Bundle `pi-background-tasks` 0.6.0 for named detachable shell commands,
-  external bounded logs, an interactive task dock, and completion wakeups.
+  external bounded logs, an interactive task dock, and completion wakeups. Apply
+  a pinned installation patch that recreates its cached per-session task
+  directory before every launch, so project cleanup cannot strand subsequent
+  agent wrappers and metadata writes with `ENOENT`.
 - Start RLM runs detached by default and emit one bounded completion wakeup so
   the main Pi session remains interactive; `async=false` retains explicit
   blocking behavior for short calls.
