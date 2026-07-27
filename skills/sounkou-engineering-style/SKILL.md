@@ -1,6 +1,6 @@
 ---
 name: sounkou-engineering-style
-description: Applies the working and coding style used across sounkou-bioinfo and RGenomicsETL projects: one-controller conceptual control without agent/worktree sprawl, evidence-driven dialectical design, one semantic authority, explicit C ownership and bounds, idiomatic R and S7, composable SQL, focused changes, and executable proof. Use when working in DuckHTS, Rducks, Rfmalloc, ducknng, DuckTinyCC, Rho, or when the user asks for "our style".
+description: "Applies the working and coding style used across sounkou-bioinfo and RGenomicsETL projects: one-controller conceptual control without agent/worktree sprawl, evidence-driven dialectical design, one semantic authority, explicit C ownership and bounds, idiomatic R and S7, composable SQL, focused changes, and executable proof. Use when working in DuckHTS, Rducks, Rfmalloc, ducknng, DuckTinyCC, Rho, or when the user asks for \"our style\"."
 ---
 
 # Sounkou Engineering Style

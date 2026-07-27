@@ -1,6 +1,6 @@
 ---
 name: rho-development
-description: Guides development in the RGenomicsETL/Rho monorepo: evidence-driven dialectical refinement, modern R and functional S7 OOP, s7contract interfaces, asynchronous tasks and streams, explicit capabilities, provider and session protocols, authored Rmd tests, and monorepo gates. Use when working in Rho or its rho.* packages.
+description: "Guides development in the RGenomicsETL/Rho monorepo: evidence-driven dialectical refinement, modern R and functional S7 OOP, s7contract interfaces, asynchronous tasks and streams, explicit capabilities, provider and session protocols, authored Rmd tests, and monorepo gates. Use when working in Rho or its rho.* packages."
 ---
 
 # Rho Development

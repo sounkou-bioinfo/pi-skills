@@ -1,6 +1,6 @@
 ---
 name: rfmalloc-development
-description: Guides development in the Rfmalloc monorepo and its Rfmalloc, Rggml, Rgguf, Rllm, Rpgen, and RfmallocStatgen packages: typed out-of-core storage, C-callable contracts, backend fallback, generated GGML vendoring, architecture programs, numerical oracles, cross-package checks, and GPU-rig evidence. Use when working in sounkou-bioinfo/Rfmalloc.
+description: "Guides development in the Rfmalloc monorepo and its Rfmalloc, Rggml, Rgguf, Rllm, Rpgen, and RfmallocStatgen packages: typed out-of-core storage, C-callable contracts, backend fallback, generated GGML vendoring, architecture programs, numerical oracles, cross-package checks, and GPU-rig evidence. Use when working in sounkou-bioinfo/Rfmalloc."
 ---
 
 # Rfmalloc Development

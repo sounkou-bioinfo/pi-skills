@@ -1,6 +1,6 @@
 ---
 name: ducknng-development
-description: Guides development in the ducknng pure-C DuckDB extension: registry-derived RPC manifests, NNG/HTTP/WebSocket carrier boundaries, Arrow IPC and Quack payloads, explicit service/session/AIO lifetime, bounded security contracts, stable and unstable DuckDB API audits, SQL/property/browser/interop tests, and generated function catalogs. Use when working in sounkou-bioinfo/ducknng.
+description: "Guides development in the ducknng pure-C DuckDB extension: registry-derived RPC manifests, NNG/HTTP/WebSocket carrier boundaries, Arrow IPC and Quack payloads, explicit service/session/AIO lifetime, bounded security contracts, stable and unstable DuckDB API audits, SQL/property/browser/interop tests, and generated function catalogs. Use when working in sounkou-bioinfo/ducknng."
 ---
 
 # ducknng Development

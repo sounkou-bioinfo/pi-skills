@@ -1,6 +1,6 @@
 ---
 name: ducktinycc-development
-description: Guides development in DuckTinyCC: in-memory TinyCC state and relocated artifact lifetime, generated scalar-UDF wrappers, recursive DuckDB/C descriptors, embedded runtime assets, trusted native-code boundaries, allocator domains, SQL stability, source-split conventions, upstream precedents, and extension/community tests. Use when working in sounkou-bioinfo/DuckTinyCC.
+description: "Guides development in DuckTinyCC: in-memory TinyCC state and relocated artifact lifetime, generated scalar-UDF wrappers, recursive DuckDB/C descriptors, embedded runtime assets, trusted native-code boundaries, allocator domains, SQL stability, source-split conventions, upstream precedents, and extension/community tests. Use when working in sounkou-bioinfo/DuckTinyCC."
 ---
 
 # DuckTinyCC Development
