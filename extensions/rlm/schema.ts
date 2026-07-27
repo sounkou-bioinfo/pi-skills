@@ -18,7 +18,7 @@ export const rlmToolParamsSchema = Type.Object({
   contextKind: Type.Optional(contextKindSchema),
   backend: Type.Optional(backendSchema),
   mode: Type.Optional(modeSchema),
-  async: Type.Optional(Type.Boolean({ description: "Return immediately and run in background" })),
+  async: Type.Optional(Type.Boolean({ description: "Detach and return a run ID so the Pi session stays interactive. Default: true; set false only for a short call that should block." })),
   model: Type.Optional(Type.String({ description: "Root model. Default: openai-codex/gpt-5.4" })),
   subModel: Type.Optional(Type.String({ description: "Recursive subcall model. Default: openai-codex/gpt-5.3-codex-spark" })),
   cwd: Type.Optional(Type.String({ description: "Working directory for model subprocesses and relative paths" })),

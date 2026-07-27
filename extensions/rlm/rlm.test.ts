@@ -4,12 +4,49 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { completeWithCli } from "./backends.js";
 import { loadFileContext } from "./engine.js";
+import { notifyWhenComplete, resolveStartInput } from "./index.js";
 import { evalInRepl } from "./repl.js";
 import { RunStore } from "./runs.js";
 import { evalWithR } from "./system-r.js";
-import type { RlmRunResult, StartRunInput } from "./types.js";
+import type { RlmRunResult, RunRecord, StartRunInput } from "./types.js";
+
+test("RLM starts detached by default but permits an explicit blocking call", () => {
+  assert.equal(resolveStartInput({ task: "inspect", context: "x" }, "/tmp").async, true);
+  assert.equal(resolveStartInput({ task: "inspect", context: "x", async: false }, "/tmp").async, false);
+});
+
+test("detached RLM completion emits one bounded follow-up wakeup", async () => {
+  const sent: Array<{ message: unknown; options: unknown }> = [];
+  const pi = {
+    sendMessage(message: unknown, options: unknown) {
+      sent.push({ message, options });
+    },
+  } as unknown as ExtensionAPI;
+  const result = fakeResult("notify", "/tmp");
+  result.final = "x".repeat(5000);
+  const record: RunRecord = {
+    id: "notify",
+    createdAt: Date.now(),
+    status: "completed",
+    artifactsDir: result.artifacts.dir,
+    input: startInput(),
+    result,
+    promise: Promise.resolve(result),
+    cancel() {},
+  };
+
+  await notifyWhenComplete(pi, record, () => false);
+
+  assert.equal(sent.length, 1);
+  const message = sent[0]?.message as { customType: string; content: string };
+  assert.equal(message.customType, "rlm-completion");
+  assert.match(message.content, /RLM background run notify completed/);
+  assert(message.content.length < 2300);
+  assert.deepEqual(sent[0]?.options, { deliverAs: "followUp", triggerTurn: true });
+});
 
 test("file context uses a Git-aware manifest and prioritizes authorities", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-rlm-context-test-"));

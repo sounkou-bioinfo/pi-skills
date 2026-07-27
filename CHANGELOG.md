@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Bundle `pi-background-tasks` 0.6.0 for named detachable shell commands,
+  external bounded logs, an interactive task dock, and completion wakeups.
+- Start RLM runs detached by default and emit one bounded completion wakeup so
+  the main Pi session remains interactive; `async=false` retains explicit
+  blocking behavior for short calls.
+- Update the Pi development API dependencies to `@earendil-works/pi-ai` and
+  `@earendil-works/pi-coding-agent` 0.82.1.
 - Make the RLM a single-controller system: recursion now requires `mode=decompose`, defaults are shallow, and both runs and child model processes are serialized as a hard safety boundary.
 - Isolate child Pi calls from tools, extensions, skills, context files, and nested orchestration; parse JSON events as a bounded stream instead of retaining cumulative stdout.
 - Replace filesystem-order directory truncation with a Git-aware, authority-first manifest, bounded text loading, binary/large-file metadata, and lazy read/grep helpers.

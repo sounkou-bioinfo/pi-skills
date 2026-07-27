@@ -4,8 +4,8 @@
 
 Personal, skills-first Pi package for `sounkou-bioinfo`.
 
-It includes domain skills, the user-wide `/goals` extension, and a lean
-RLM tool that uses system R directly.
+It includes domain skills, detachable background tasks, the user-wide
+`/goals` extension, and a lean RLM tool that uses system R directly.
 
 ## Install
 
@@ -28,9 +28,12 @@ plus skill frontmatter.
 
 - `goals` — Codex-style `/goals` and `/goal` session goal loop
   extension.
-- `rlm` — Single-controller long-context tool with externalized
-  inspection, bounded opt-in recursion, system `Rscript` evaluation, and
-  DuckDB-backed parquet sampling.
+- `rlm` — Detached-by-default single-controller long-context runs with
+  completion wakeups, bounded opt-in recursion, system `Rscript`
+  evaluation, and DuckDB-backed parquet sampling.
+- `background-tasks` — Named detachable shell tasks with bounded
+  external logs, status/kill tools, a focused TUI dock, and one
+  completion wakeup.
 
 ### Orchestration discipline
 
@@ -42,8 +45,15 @@ for materially independent contradictions.
 
 Only one RLM run and one child model process are active at a time; at
 most four active/queued runs are retained. Additional background runs
-and recursive children queue. This serialization is a hard safety
-boundary, not a tuning default.
+and recursive children queue. RLM starts detached by default, keeps the
+Pi session interactive, and emits one bounded completion wakeup; set
+`async=false` only for a short blocking call. This serialization is a
+hard safety boundary, not a tuning default.
+
+Long-running shell commands use `bg_run`: output stays in bounded
+external task files while Pi remains interactive, and completion emits
+one status/path wakeup. This avoids holding a foreground tool call open
+or repeatedly injecting CI progress into model context.
 
 Inline context is capped at 5M characters. Eager text files are capped
 at 20MB and eager CSV/JSON files at 10MB. Directory contexts keep a
@@ -188,7 +198,7 @@ prioritized text, and expose bounded lazy reads for omitted text files.
   dialectical design, one semantic authority, explicit C ownership and
   bounds, idiomatic R and S7, composable SQL, focused changes, and
   executable proof. Use when working in DuckHTS, Rducks, Rfmalloc,
-  ducknng, DuckTinyCC, Rho, or when the user asks for “our style”.
+  ducknng, DuckTinyCC, Rho, or when the user asks for "our style".
 
 ## RLM and R runtime direction
 
@@ -220,6 +230,7 @@ npm install
 npm run typecheck
 npm run test:rlm
 npm run render:readme
+npm pack --dry-run
 ```
 
 Runtime Pi APIs are peer dependencies supplied by Pi itself.

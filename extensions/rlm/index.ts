@@ -9,12 +9,13 @@ const defaultTimeoutMs = 180000;
 
 export default function extension(pi: ExtensionAPI): void {
   const runs = new RunStore(1);
+  let shuttingDown = false;
 
   pi.registerTool({
     name: "rlm",
     label: "RLM",
     description:
-      "Long-context controller with externalized file/data inspection and system-R evaluation. Recursion is explicit, shallow, serial by default, and budgeted to avoid sub-agent sprawl.",
+      "Long-context controller with externalized file/data inspection and system-R evaluation. Starts detached by default so the Pi session remains interactive, then emits one bounded completion wakeup. Set async=false only for a short blocking call. Recursion is explicit, shallow, serial, and budgeted.",
     parameters: rlmToolParamsSchema,
     async execute(_toolCallId, params: RlmToolParams, signal, onUpdate, ctx) {
       const op = params.op ?? "start";
@@ -35,9 +36,10 @@ export default function extension(pi: ExtensionAPI): void {
         );
 
         if (input.async) {
+          void notifyWhenComplete(pi, record, () => shuttingDown).catch(() => undefined);
           const disposition = record.status === "queued" ? "queued behind the active controller" : "started in background";
           return {
-            content: [{ type: "text", text: `RLM run ${disposition}.\nrun_id: ${record.id}` }],
+            content: [{ type: "text", text: `RLM run ${disposition}. Pi remains interactive and will receive one completion wakeup.\nrun_id: ${record.id}` }],
             details: toRunDetails(record),
           };
         }
@@ -91,12 +93,55 @@ export default function extension(pi: ExtensionAPI): void {
     },
   });
 
+  pi.on("session_start", async () => {
+    shuttingDown = false;
+  });
+
   pi.on("session_shutdown", async () => {
+    shuttingDown = true;
     await runs.shutdown();
   });
 }
 
-function resolveStartInput(params: RlmToolParams, cwd: string): StartRunInput {
+export async function notifyWhenComplete(
+  pi: ExtensionAPI,
+  record: RunRecord,
+  isShuttingDown: () => boolean,
+): Promise<void> {
+  await record.promise.then(
+    (result) => {
+      if (isShuttingDown()) return;
+      pi.sendMessage(
+        {
+          customType: "rlm-completion",
+          content: [
+            `RLM background run ${record.id} completed.`,
+            `Artifacts: ${result.artifacts.dir}`,
+            `Final (bounded): ${shorten(result.final, 2000)}`,
+          ].join("\n"),
+          display: true,
+          details: toRunDetails(record),
+        },
+        { deliverAs: "followUp", triggerTurn: true },
+      );
+    },
+    (error: unknown) => {
+      if (isShuttingDown()) return;
+      const message = error instanceof Error ? error.message : String(error);
+      pi.sendMessage(
+        {
+          customType: "rlm-completion",
+          content: `RLM background run ${record.id} ${record.status}.\nError: ${shorten(message, 1000)}\nArtifacts: ${record.artifactsDir}`,
+          display: true,
+          details: toRunDetails(record),
+        },
+        { deliverAs: "followUp", triggerTurn: true },
+      );
+    },
+  );
+}
+
+export function resolveStartInput(params: RlmToolParams, cwd: string): StartRunInput {
   return {
     task: params.task ?? "",
     context: params.context,
@@ -104,7 +149,7 @@ function resolveStartInput(params: RlmToolParams, cwd: string): StartRunInput {
     contextKind: params.contextKind,
     cwd: params.cwd ?? cwd,
     backend: params.backend ?? "cli",
-    async: params.async ?? false,
+    async: params.async ?? true,
     model: params.model ?? "openai-codex/gpt-5.4",
     subModel: params.subModel ?? "openai-codex/gpt-5.3-codex-spark",
     mode: params.mode ?? "auto",

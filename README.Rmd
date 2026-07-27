@@ -40,13 +40,16 @@ expand_pi_entries <- function(entries, predicate) {
   paths <- unique(unlist(lapply(includes, expand_one), use.names = FALSE))
   excluded <- unique(unlist(lapply(excludes, expand_one), use.names = FALSE))
   paths <- setdiff(paths, excluded)
-  paths <- paths[file.info(paths)$isdir %in% TRUE]
+  paths <- paths[file.exists(paths) | dir.exists(paths)]
   sort(paths[vapply(paths, predicate, logical(1))])
 }
 
 is_skill_dir <- function(path) file.exists(file.path(path, "SKILL.md"))
-is_extension_dir <- function(path) {
-  file.exists(file.path(path, "index.ts")) || file.exists(file.path(path, "index.js"))
+is_extension_path <- function(path) {
+  if (dir.exists(path)) {
+    return(file.exists(file.path(path, "index.ts")) || file.exists(file.path(path, "index.js")))
+  }
+  grepl("[.](ts|js)$", path)
 }
 
 frontmatter_value <- function(lines, key) {
@@ -70,11 +73,12 @@ read_skill_meta <- function(path) {
 }
 
 extension_descriptions <- c(
+  `background-tasks` = "Named detachable shell tasks with bounded external logs, status/kill tools, a focused TUI dock, and one completion wakeup.",
   goals = "Codex-style `/goals` and `/goal` session goal loop extension.",
-  rlm = "Single-controller long-context tool with externalized inspection, bounded opt-in recursion, system `Rscript` evaluation, and DuckDB-backed parquet sampling."
+  rlm = "Detached-by-default single-controller long-context runs with completion wakeups, bounded opt-in recursion, system `Rscript` evaluation, and DuckDB-backed parquet sampling."
 )
 
-extension_paths <- expand_pi_entries(pkg$pi$extensions, is_extension_dir)
+extension_paths <- expand_pi_entries(pkg$pi$extensions, is_extension_path)
 skill_paths <- expand_pi_entries(pkg$pi$skills, is_skill_dir)
 skills <- lapply(skill_paths, read_skill_meta)
 skills <- skills[order(vapply(skills, `[[`, character(1), "name"))]
@@ -96,7 +100,7 @@ cat_bullets <- function(rows) {
 
 Personal, skills-first Pi package for `sounkou-bioinfo`.
 
-It includes domain skills, the user-wide `/goals` extension, and a lean RLM tool that uses system R directly.
+It includes domain skills, detachable background tasks, the user-wide `/goals` extension, and a lean RLM tool that uses system R directly.
 
 ## Install
 
@@ -118,7 +122,7 @@ The extension and skill lists below are generated from `package.json` plus skill
 
 ```{r extensions, results='asis', echo=FALSE}
 extension_rows <- lapply(extension_paths, function(path) {
-  name <- basename(path)
+  name <- sub("[.](ts|js)$", "", basename(path))
   description <- if (name %in% names(extension_descriptions)) unname(extension_descriptions[[name]]) else ""
   list(name = name, description = description)
 })
@@ -129,7 +133,9 @@ cat_bullets(extension_rows)
 
 This package does not ship a subagent/scout/plan/recon swarm and does not create worktrees. The RLM keeps long context outside the model and uses one controller to inspect it. Its default `auto` mode does not recurse; `mode=decompose` is an explicit, shallow, budgeted exception for materially independent contradictions.
 
-Only one RLM run and one child model process are active at a time; at most four active/queued runs are retained. Additional background runs and recursive children queue. This serialization is a hard safety boundary, not a tuning default.
+Only one RLM run and one child model process are active at a time; at most four active/queued runs are retained. Additional background runs and recursive children queue. RLM starts detached by default, keeps the Pi session interactive, and emits one bounded completion wakeup; set `async=false` only for a short blocking call. This serialization is a hard safety boundary, not a tuning default.
+
+Long-running shell commands use `bg_run`: output stays in bounded external task files while Pi remains interactive, and completion emits one status/path wakeup. This avoids holding a foreground tool call open or repeatedly injecting CI progress into model context.
 
 Inline context is capped at 5M characters. Eager text files are capped at 20MB and eager CSV/JSON files at 10MB. Directory contexts keep a Git-aware manifest of up to 20,000 files, eagerly load at most 5MB of prioritized text, and expose bounded lazy reads for omitted text files.
 
@@ -160,6 +166,7 @@ npm install
 npm run typecheck
 npm run test:rlm
 npm run render:readme
+npm pack --dry-run
 ```
 
 Runtime Pi APIs are peer dependencies supplied by Pi itself.

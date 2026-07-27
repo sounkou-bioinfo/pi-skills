@@ -2,7 +2,7 @@
   "name": "pi-skills",
   "version": "1.1.1",
   "private": false,
-  "description": "Skills-first Pi package for R, bioinformatics rewrites, DuckDB C extensions, system-R RLM, and a small goals extension.",
+  "description": "Skills-first Pi package for R, bioinformatics rewrites, DuckDB C extensions, detachable background tasks, system-R RLM, and goals.",
   "license": "MIT",
   "type": "module",
   "keywords": [
@@ -31,7 +31,8 @@
   },
   "pi": {
     "extensions": [
-      "./extensions"
+      "./extensions",
+      "./node_modules/pi-background-tasks/extensions/background-tasks.ts"
     ],
     "skills": [
       "./skills"
@@ -55,11 +56,15 @@
     }
   },
   "dependencies": {
-    "@duckdb/node-api": "^1.5.4-r.1"
+    "@duckdb/node-api": "^1.5.4-r.1",
+    "pi-background-tasks": "0.6.0"
   },
+  "bundledDependencies": [
+    "pi-background-tasks"
+  ],
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.78.0",
-    "@earendil-works/pi-coding-agent": "^0.78.0",
+    "@earendil-works/pi-ai": "^0.82.1",
+    "@earendil-works/pi-coding-agent": "^0.82.1",
     "@types/node": "^24.0.0",
     "typebox": "^1.1.38",
     "typescript": "^5.8.3"
