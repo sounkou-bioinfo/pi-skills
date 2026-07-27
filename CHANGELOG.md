@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add append-only permanent memory backed by SQLite/WAL through DuckDB's
+  SQLite storage extension: a Semantic-SQL-style statement authority,
+  explicit transaction/timestamp `as_of`, recursive summary-graph wake and
+  zoom views, process-local DuckDB FTS, externally isolated and resource-bounded
+  read-only SQL, source-hash-checked compression, invalidation history, and
+  cross-process write retry.
+- Credit INCATools Semantic-SQL for the few-base-tables/many-views pattern and
+  Victor Taelin's OptMem for the independently implemented append-only,
+  bounded fading-detail, navigable-summary concepts.
 - Bundle `pi-background-tasks` 0.6.0 for named detachable shell commands,
   external bounded logs, an interactive task dock, and completion wakeups.
 - Start RLM runs detached by default and emit one bounded completion wakeup so

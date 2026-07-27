@@ -2,7 +2,7 @@
   "name": "pi-skills",
   "version": "1.1.1",
   "private": false,
-  "description": "Skills-first Pi package for R, bioinformatics rewrites, DuckDB C extensions, detachable background tasks, system-R RLM, and goals.",
+  "description": "Skills-first Pi package with permanent Semantic-SQL memory, bioinformatics and R skills, detachable tasks, system-R RLM, and goals.",
   "license": "MIT",
   "type": "module",
   "keywords": [
@@ -25,6 +25,8 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "npm run test:memory && npm run test:rlm",
+    "test:memory": "rm -rf .memory-test-build && tsc --noEmit false --outDir .memory-test-build --declaration false && cp extensions/memory/*.sql .memory-test-build/memory/ && node --test .memory-test-build/memory/memory.test.js; status=$?; rm -rf .memory-test-build; exit $status",
     "test:rlm": "rm -rf .rlm-test-build && tsc --noEmit false --outDir .rlm-test-build --declaration false && node --test .rlm-test-build/rlm/rlm.test.js; status=$?; rm -rf .rlm-test-build; exit $status",
     "render:readme": "Rscript scripts/render_readme.R",
     "check:readme": "Rscript scripts/render_readme.R --check"

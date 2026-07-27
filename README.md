@@ -4,8 +4,9 @@
 
 Personal, skills-first Pi package for `sounkou-bioinfo`.
 
-It includes domain skills, detachable background tasks, the user-wide
-`/goals` extension, and a lean RLM tool that uses system R directly.
+It includes domain skills, permanent semantic memory, detachable
+background tasks, the user-wide `/goals` extension, and a lean RLM tool
+that uses system R directly.
 
 ## Install
 
@@ -28,6 +29,9 @@ plus skill frontmatter.
 
 - `goals` — Codex-style `/goals` and `/goal` session goal loop
   extension.
+- `memory` — Append-only Semantic-SQL memory in SQLite/WAL with bounded
+  summary-frontier wakeups, historical `as_of`, graph traversal, and
+  DuckDB FTS.
 - `rlm` — Detached-by-default single-controller long-context runs with
   completion wakeups, bounded opt-in recursion, system `Rscript`
   evaluation, and DuckDB-backed parquet sampling.
@@ -54,6 +58,42 @@ Long-running shell commands use `bg_run`: output stays in bounded
 external task files while Pi remains interactive, and completion emits
 one status/path wakeup. This avoids holding a foreground tool call open
 or repeatedly injecting CI progress into model context.
+
+### Permanent memory
+
+The `memory` extension keeps one append-only SQLite authority at
+`~/.pi/agent/memory.sqlite` (override with `PI_MEMORY_DB`). SQLite runs
+in WAL mode; each Pi process owns an in-memory DuckDB connection
+attached through DuckDB’s SQLite storage extension. Transactions and
+RDF-shaped statements are the small physical core. Notes, current facts,
+history, summaries, graph edges, pending compression, bounded wake
+frontiers, and historical `as_of` projections are SQL views or recursive
+SQL queries.
+
+Repeated `(graph, subject, predicate)` statements create inspectable
+versions rather than rewriting history. `memory sql` selects an explicit
+transaction or timestamp and exposes `as_of_statement`, `as_of_note`,
+`as_of_summary`, `node_to_node_statement`, `node_to_value_statement`,
+`memory_block`, `pending_summary`, and `wake`. Its dedicated read-only
+connection disables local and network filesystem access, locks DuckDB
+configuration, and bounds query text, memory, threads, runtime, and
+returned rows. `recall` maintains a process-local DuckDB FTS projection
+over exact notes; the SQLite statements remain authoritative. Optional
+embeddings can therefore remain a replaceable derived projection if a
+measured need appears.
+
+Summary nodes and their `memory:left` / `memory:right` statements form a
+graph that the agent can walk with recursive SQL or `zoom`. The `graph`
+column leaves named-graph/fork projections schema-compatible, but this
+package does not invent branch-head or merge policy before a current
+consumer needs it.
+
+The few-base-tables/many-semantic-views design follows [INCATools
+Semantic-SQL](https://github.com/INCATools/semantic-sql). The
+append-only log, bounded fading-detail context, and navigable summary
+hierarchy are independently implemented concepts inspired by
+[VictorTaelin/OptMem](https://github.com/VictorTaelin/OptMem); no OptMem
+source is included.
 
 Inline context is capped at 5M characters. Eager text files are capped
 at 20MB and eager CSV/JSON files at 10MB. Directory contexts keep a
@@ -228,6 +268,8 @@ NNG/nanoarrow, with DuckDB extensions as first-class runtime peers.
 ``` sh
 npm install
 npm run typecheck
+npm run test
+npm run test:memory
 npm run test:rlm
 npm run render:readme
 npm pack --dry-run

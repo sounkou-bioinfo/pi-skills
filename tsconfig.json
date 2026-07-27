@@ -9,5 +9,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["extensions/goals/**/*.ts", "extensions/rlm/**/*.ts"]
+  "include": ["extensions/goals/**/*.ts", "extensions/memory/**/*.ts", "extensions/rlm/**/*.ts"]
 }
