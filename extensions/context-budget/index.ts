@@ -12,6 +12,7 @@ const OMITTED_MARKER = "\n\n[Context budget: middle omitted. Re-run read with of
 type TextPart = { type: "text"; text: string };
 type CandidateToolResult = {
   role?: string;
+  toolCallId?: string;
   toolName?: string;
   content?: Array<{ type: string; text?: string }>;
 };
@@ -19,9 +20,23 @@ type CandidateToolResult = {
 export default function contextBudgetExtension(pi: ExtensionAPI): void {
   const maxBytes = configuredByteLimit(process.env.PI_CONTEXT_TOOL_RESULT_BYTES);
   const totalBytes = configuredTotalByteLimit(process.env.PI_CONTEXT_TOOL_RESULTS_TOTAL_BYTES);
-  pi.on("context", async (event) => ({
-    messages: boundInspectionResults(event.messages, maxBytes, totalBytes),
-  }));
+  let sessionId: string | undefined;
+  let settled = new Map<string, boolean>();
+
+  function resetForSession(nextSessionId: string | undefined) {
+    if (sessionId === nextSessionId) return;
+    sessionId = nextSessionId;
+    settled = new Map();
+  }
+
+  pi.on("session_start", async (_event, ctx) => resetForSession(ctx.sessionManager.getSessionId()));
+  pi.on("session_tree", async (_event, ctx) => resetForSession(ctx.sessionManager.getSessionId()));
+  pi.on("session_shutdown", async () => resetForSession(undefined));
+
+  pi.on("context", async (event, ctx) => {
+    resetForSession(ctx.sessionManager.getSessionId());
+    return { messages: boundInspectionResults(event.messages, maxBytes, totalBytes, settled) };
+  });
 }
 
 export function boundToolResult<T>(message: T, maxBytes = DEFAULT_TOOL_RESULT_BYTES): T {
@@ -42,27 +57,57 @@ export function boundToolResult<T>(message: T, maxBytes = DEFAULT_TOOL_RESULT_BY
   } as T;
 }
 
-export function boundInspectionResults<T>(messages: T[], maxBytes = DEFAULT_TOOL_RESULT_BYTES, totalBytes = DEFAULT_TOTAL_TOOL_RESULT_BYTES): T[] {
+// `settled` freezes each result's full-vs-stubbed fate the first time it is evaluated, keyed by
+// toolCallId. A result already sent to the model in full must never flip to a stub later: doing so
+// would rewrite already-transmitted history and invalidate provider-side prompt caching for every
+// turn since. Only newly-seen results compete for the remaining budget, prioritizing recency among
+// themselves; results without a toolCallId cannot be memoized and are re-evaluated every call.
+export function boundInspectionResults<T>(
+  messages: T[],
+  maxBytes = DEFAULT_TOOL_RESULT_BYTES,
+  totalBytes = DEFAULT_TOTAL_TOOL_RESULT_BYTES,
+  settled: Map<string, boolean> = new Map(),
+): T[] {
   const bounded = messages.map((message) => boundToolResult(message, maxBytes));
-  let retainedBytes = 0;
-  for (let index = bounded.length - 1; index >= 0; index--) {
+  const pending: Array<{ index: number; id: string | undefined; bytes: number }> = [];
+  let committedBytes = 0;
+
+  for (let index = 0; index < bounded.length; index++) {
     const message = bounded[index] as CandidateToolResult;
     if (message.role !== "toolResult" || !message.toolName || !BOUNDED_TOOLS.has(message.toolName)) continue;
     if (!message.content || message.content.some((part) => part.type !== "text" || typeof part.text !== "string")) continue;
     const bytes = Buffer.byteLength(message.content.map((part) => part.text ?? "").join("\n"), "utf8");
-    if (retainedBytes + bytes <= totalBytes) {
-      retainedBytes += bytes;
-      continue;
+    const fate = message.toolCallId !== undefined ? settled.get(message.toolCallId) : undefined;
+    if (fate === true) {
+      bounded[index] = stubResult(bounded[index] as object, message.toolName, bytes) as T;
+    } else if (fate === false) {
+      committedBytes += bytes;
+    } else {
+      pending.push({ index, id: message.toolCallId, bytes });
     }
-    bounded[index] = {
-      ...bounded[index] as object,
-      content: [{
-        type: "text",
-        text: `[Context budget: earlier ${message.toolName} result (${bytes} bytes after per-result bounding) omitted. Re-run the recorded tool call if it is needed.]`,
-      } satisfies TextPart],
-    } as T;
   }
+
+  let remaining = Math.max(0, totalBytes - committedBytes);
+  for (let i = pending.length - 1; i >= 0; i--) {
+    const { index, id, bytes } = pending[i];
+    const message = bounded[index] as CandidateToolResult;
+    const keepFull = bytes <= remaining;
+    if (keepFull) remaining -= bytes;
+    else bounded[index] = stubResult(bounded[index] as object, message.toolName!, bytes) as T;
+    if (id !== undefined) settled.set(id, !keepFull);
+  }
+
   return bounded;
+}
+
+function stubResult(message: object, toolName: string, bytes: number): object {
+  return {
+    ...message,
+    content: [{
+      type: "text",
+      text: `[Context budget: earlier ${toolName} result (${bytes} bytes after per-result bounding) omitted. Re-run the recorded tool call if it is needed.]`,
+    } satisfies TextPart],
+  };
 }
 
 function configuredByteLimit(value: string | undefined): number {

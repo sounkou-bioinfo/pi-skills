@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Add a schema-free `context-budget` hook with 12 KiB per-result and 64 KiB aggregate budgets for built-in inspection results. It retains newest evidence, replaces older bodies with rerunnable receipts, and preserves complete stored/UI results.
+- Add a schema-free `context-budget` hook with 12 KiB per-result and 64 KiB aggregate budgets for built-in inspection results. It retains newest evidence, replaces older bodies with rerunnable receipts, preserves complete stored/UI results, and freezes each result's full-vs-receipt fate the first time it is evaluated so previously transmitted content is never rewritten and provider prompt caching stays intact.
 - Keep dynamic memory and goal state out of the early system-prompt cache prefix. Stable policies remain in the system prompt; bounded task/goal projections are transient context immediately before the current user message, replace rather than accumulate, and stay frozen through each tool loop.
 - Reduce memory retrieval from the generic 80-row wake to a four-row summary frontier plus at most four task-matched exact notes. Compact automatic goal continuations to one sentence instead of persisting the objective and completion checklist every turn.
 - Consolidate 26 overlapping skills into 20 distinct authorities and rewrite surviving `SKILL.md` contracts from 170K to about 36K characters. Fold generic DuckDB API/catalog/testing/vendoring guidance into one C-extension architecture skill, compatibility rewriting into DuckHTS development, and the library-first umbrella into narrower FFI/rewrite/single-pass authorities.
