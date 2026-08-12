@@ -27,9 +27,9 @@ plus skill frontmatter.
 
 ### Extensions
 
-- `anti-slop` — Tree-sitter-only, configurable R/C audit for proven
-  redundant guards, no-op R error handlers, empty branches, and
-  host-unsafe C runtime assertions.
+- `anti-slop` — Tree-sitter-only, configurable R/C audit for redundant
+  code, private-helper call counts and justification, ambiguous length
+  conditions, empty branches, and host-unsafe C runtime assertions.
 - `goals` — Codex-style `/goals` and `/goal` session goal loop
   extension.
 - `memory` — Append-only Semantic-SQL memory in SQLite/WAL with bounded
@@ -44,15 +44,20 @@ plus skill frontmatter.
 
 ### Anti-slop AST audit
 
-`anti_slop` and `/anti-slop path/to/source.R` audit one R or C source
-file with the vendored Tree-sitter analyzer. The extension deliberately
-does not use regex or a substitute parser: unavailable R grammar
-packages and parse errors are explicit results. Runtime requirements are
-`treesitter`, `treesitter.r` for R, and
-[treesitter.c](https://github.com/sounkou-bioinfo/treesitter.c) for C;
-optional JSON configuration and machine-readable output use `jsonlite`.
-See the `r-c-anti-slop` skill for its narrow rule scope and review
-workflow.
+`anti_slop` and `/anti-slop path/to/source.R` audit one R/C source file
+or a directory with the vendored Tree-sitter analyzer. A Git directory
+scans its tracked R/C files beneath that path; a non-Git directory
+recurses over recognized source suffixes. It counts direct calls to each
+top-level R private helper across that analysis scope and asks for its
+distinct invariant/effect, flags condition sprawl and ambiguous
+`length()` truthiness, and inspects narrow redundant/host-unsafe C
+patterns. The extension deliberately does not use regex or a substitute
+parser: unavailable R grammar packages and parse errors are explicit
+results. Runtime requirements are `treesitter`, `treesitter.r` for R,
+and [treesitter.c](https://github.com/sounkou-bioinfo/treesitter.c) for
+C; optional JSON configuration and machine-readable output use
+`jsonlite`. See the `r-c-anti-slop` skill for its narrow rule scope and
+review workflow.
 
 ### Orchestration discipline
 

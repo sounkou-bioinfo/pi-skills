@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Add a repository-vendored, Tree-sitter-only R/C anti-slop analyzer with a Pi `anti_slop` tool and `/anti-slop` command. It flags only structured redundant final returns, no-op R rethrow handlers, duplicate terminating guards, empty alternatives, and C runtime assertions that can abort an embedded host; JSON configuration controls rule severity without parser fallback.
+- Add a repository-vendored, Tree-sitter-only R/C anti-slop analyzer with a Pi `anti_slop` tool and `/anti-slop` command. It scans source files or whole directories (Git-tracked sources when available), flags structured redundant final returns, no-op R rethrow handlers, duplicate terminating guards, private R-helper direct-call counts requiring justification, condition sprawl, ambiguous `length()` truthiness, empty alternatives, and C runtime assertions that can abort an embedded host; JSON configuration controls rule severity without parser fallback.
 - Add the `r-c-anti-slop` skill and executable R/C analyzer fixtures, including parse-error and no-fallback proof.
 - Add append-only permanent memory backed by SQLite/WAL through DuckDB's
   SQLite storage extension: a Semantic-SQL-style statement authority,
