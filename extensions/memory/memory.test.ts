@@ -195,6 +195,58 @@ test("multiple processes initialize and append through SQLite WAL without collid
   }
 });
 
+test("memory policy is stable and one transient projection is reused through a tool loop", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-memory-context-"));
+  const databasePath = join(directory, "memory.sqlite");
+  try {
+    const extensionUrl = new URL("./index.js", import.meta.url).href;
+    const code = `
+      process.env.PI_MEMORY_DB = process.argv[1];
+      const { default: extension } = await import(${JSON.stringify(new URL("./index.js", import.meta.url).href)});
+      const handlers = {};
+      let tool;
+      const pi = {
+        registerTool(value) { tool = value; },
+        on(name, handler) { handlers[name] = handler; },
+      };
+      extension(pi);
+      const ctx = {
+        sessionManager: { getSessionId() { return 'context-session'; } },
+        ui: { setStatus() {}, notify() {} },
+      };
+      await handlers.session_start({}, ctx);
+      await tool.execute('seed', { op: 'note', text: 'DuckHTS uses public reproducible artifacts.' }, undefined, undefined, ctx);
+      const before = await handlers.before_agent_start({ systemPrompt: 'base' }, ctx);
+      if (!before.systemPrompt.includes('PERMANENT MEMORY POLICY')) throw new Error('missing stable policy');
+      if (before.systemPrompt.includes('DuckHTS uses public')) throw new Error('dynamic memory leaked into system prompt');
+
+      const messages = [{ role: 'user', content: [{ type: 'text', text: 'inspect DuckHTS artifacts' }], timestamp: 10 }];
+      const first = await handlers.context({ messages }, ctx);
+      const firstProjection = first.messages[0];
+      if (firstProjection.customType !== 'pi-memory-projection') throw new Error('missing projection before current user');
+      if (first.messages[1].role !== 'user') throw new Error('projection must precede current user');
+      if (!String(firstProjection.content).includes('DuckHTS uses public')) throw new Error('missing task memory');
+
+      await tool.execute('midturn', { op: 'note', text: 'This mid-turn note belongs to the next user turn.' }, undefined, undefined, ctx);
+      const loopMessages = [
+        ...first.messages,
+        { role: 'assistant', content: [{ type: 'toolCall', id: 'x', name: 'read', arguments: {} }], timestamp: 11 },
+        { role: 'toolResult', toolCallId: 'x', toolName: 'read', content: [{ type: 'text', text: 'ok' }], isError: false, timestamp: 12 },
+      ];
+      const second = await handlers.context({ messages: loopMessages }, ctx);
+      const projections = second.messages.filter((message) => message.customType === 'pi-memory-projection');
+      if (projections.length !== 1) throw new Error('projection accumulated');
+      if (second.messages[0].customType !== 'pi-memory-projection' || second.messages[1].role !== 'user') throw new Error('projection moved during tool loop');
+      if (projections[0].content !== firstProjection.content) throw new Error('projection recomputed during the same turn');
+      if (String(projections[0].content).includes('mid-turn note')) throw new Error('mid-turn mutation changed frozen projection');
+      await handlers.session_shutdown();
+    `;
+    await runNode(code, [databasePath], "memory context lifecycle");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("extension lifecycle serializes open, use, and shutdown", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pi-memory-lifecycle-"));
   const databasePath = join(directory, "memory.sqlite");

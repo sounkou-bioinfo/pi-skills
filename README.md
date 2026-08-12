@@ -30,11 +30,14 @@ plus skill frontmatter.
 - `anti-slop` — Tree-sitter-only, configurable R/C audit for redundant
   code, private-helper call counts and justification, ambiguous length
   conditions, empty branches, and host-unsafe C runtime assertions.
-- `goals` — Codex-style `/goals` and `/goal` session goal loop
-  extension.
-- `memory` — Append-only Semantic-SQL memory in SQLite/WAL with bounded
-  summary-frontier wakeups, historical `as_of`, graph traversal, and
-  DuckDB FTS.
+- `context-budget` — Transiently caps large built-in inspection results
+  in model context while preserving full stored/UI results and
+  deterministic recovery guidance.
+- `goals` — Session goal loop with stable policy, transient goal
+  context, compact continuations, and evidence-gated completion.
+- `memory` — Append-only Semantic-SQL memory with cache-safe task
+  retrieval, bounded summary frontiers, historical `as_of`, graph
+  traversal, and DuckDB FTS.
 - `rlm` — Detached-by-default single-controller long-context runs with
   completion wakeups, bounded opt-in recursion, system `Rscript`
   evaluation, and DuckDB-backed parquet sampling.
@@ -67,6 +70,20 @@ uses one controller to inspect it. Its default `auto` mode does not
 recurse; `mode=decompose` is an explicit, shallow, budgeted exception
 for materially independent contradictions.
 
+Skill discovery uses progressive disclosure, but names and descriptions
+are always in the system prompt. The inventory therefore keeps one
+distinct trigger per skill and delegates shared mechanics to a single
+authority instead of multiplying near-duplicate skills.
+
+The `context-budget` hook prevents broad `read`, `bash`, `grep`, `find`,
+or `ls` results from consuming the context window immediately after
+compaction. Each result is capped at 12 KiB with deterministic head/tail
+evidence; an aggregate 64 KiB budget retains newest inspection results
+and replaces older bodies with rerunnable receipts. Complete tool
+results remain stored and visible. Configure
+`PI_CONTEXT_TOOL_RESULT_BYTES` (4096–51200) and
+`PI_CONTEXT_TOOL_RESULTS_TOTAL_BYTES` (16384–524288).
+
 Only one RLM run and one child model process are active at a time; at
 most four active/queued runs are retained. Additional background runs
 and recursive children queue. RLM starts detached by default, keeps the
@@ -86,9 +103,17 @@ The `memory` extension keeps one append-only SQLite authority at
 in WAL mode; each Pi process owns an in-memory DuckDB connection
 attached through DuckDB’s SQLite storage extension. Transactions and
 RDF-shaped statements are the small physical core. Notes, current facts,
-history, summaries, graph edges, pending compression, bounded wake
-frontiers, and historical `as_of` projections are SQL views or recursive
-SQL queries.
+history, summaries, graph edges, pending compression, and historical
+`as_of` projections are SQL views or recursive SQL queries.
+
+The system prompt contains only stable memory policy. Once per user
+turn, the extension builds a small task-conditioned projection from a
+four-row summary frontier plus at most four exact FTS matches. The
+`context` hook inserts that projection immediately before the current
+user message, after the prior transcript. It is not persisted, does not
+accumulate, and remains frozen through that turn’s tool loop. A memory
+write therefore changes retrieval on the next user turn without mutating
+the early system-prompt cache prefix.
 
 Repeated `(graph, subject, predicate)` statements create inspectable
 versions rather than rewriting history. `memory sql` selects an explicit
@@ -98,9 +123,7 @@ transaction or timestamp and exposes `as_of_statement`, `as_of_note`,
 connection disables local and network filesystem access, locks DuckDB
 configuration, and bounds query text, memory, threads, runtime, and
 returned rows. `recall` maintains a process-local DuckDB FTS projection
-over exact notes; the SQLite statements remain authoritative. Optional
-embeddings can therefore remain a replaceable derived projection if a
-measured need appears.
+over exact notes; SQLite remains authoritative.
 
 Summary nodes and their `memory:left` / `memory:right` statements form a
 graph that the agent can walk with recursive SQL or `zoom`. The `graph`
@@ -122,147 +145,79 @@ prioritized text, and expose bounded lazy reads for omitted text files.
 
 ### Skills
 
-- `bioinformatics-cache-and-index-design` — Guides cache, index, and
-  annotation-store design for bioinformatics rewrites, including when to
-  use mainstream interoperable formats versus specialized
-  high-performance encodings. Use when startup cost, repeated lookup
-  performance, interval access, or annotation storage strategy are
-  central design concerns.
-- `bioinformatics-ffi-and-bindings` — Guides library-first
-  bioinformatics rewrites that expose mature native code through
-  bindings, extensions, FFI, or embedded runtimes across R, Python, SQL,
-  and wasm. Use when building reusable interfaces around existing C/C++
-  libraries instead of standalone-only rewrites.
-- `bioinformatics-rewrite-porting` — Guides responsible AI-assisted
-  rewriting and porting of bioinformatics tools, combining rewrites.bio
-  principles with practical validation, attribution, compatibility, and
-  maintenance discipline. Use when planning or implementing a rewrite,
-  reimplementation, or high-performance port of an existing
-  bioinformatics tool.
-- `bioinformatics-single-pass-analytics` — Guides design of
-  bioinformatics kernels and rewrites that compute multiple validated
-  outputs or statistics in one pass over the data, reducing repeated I/O
-  and decompression while preserving explicit semantics. Use when
-  designing fused readers, counters, coverage engines, or summary
-  pipelines.
-- `duckdb-c-extension-api-stability` — Guides DuckDB C extension API
-  selection, deprecation handling, compatibility shims, and release
-  policy. Use when balancing stable versus unstable APIs, managing
-  breaking changes, or documenting deprecation strategy for SQL and
-  wrapper surfaces.
-- `duckdb-c-extension-architecture` — Guides design of DuckDB extensions
-  written primarily in C, including runtime ownership, function
-  boundaries, state models, background services, concurrency, and
-  separation of stable logic from volatile adapter code. Use when
-  planning or restructuring a native DuckDB extension rather than a
-  one-off patch.
-- `duckdb-c-extension-function-catalog` — Guides machine-readable
-  function catalogs for DuckDB extensions, including a `functions.yaml`
-  source-of-truth pattern that can drive docs, wrappers, aliases,
-  examples, and consistency checks. Use when an extension exposes many
-  SQL functions or multiple wrapper surfaces.
-- `duckdb-c-extension-r-bindings` — Guides packaging DuckDB C extensions
-  with R bindings, including repository layout, installed artifacts, SQL
-  wrappers, generated docs, and native-versus-R responsibility
-  boundaries. Use when building or restructuring an R package around a
-  DuckDB extension.
-- `duckdb-c-extension-testing-and-interop` — Guides testing of DuckDB C
-  extensions across SQL, native, wrapper, and external-client layers,
-  with emphasis on real execution paths, sqllogictest coverage, and
-  protocol/interop validation. Use when building trustworthy tests for
-  extensions that expose SQL plus native or service behavior.
-- `duckdb-c-extension-vendoring-and-shims` — Guides vendoring of native
-  dependencies into DuckDB C extensions, including pinning, patch
-  ledgers, static linking, hidden symbols, and compatibility-shim
-  boundaries. Use when an extension needs bundled third-party C/C++
-  libraries rather than relying only on system dependencies.
-- `duckhts-development` — Guides development in the DuckHTS repo,
-  including DuckDB extension work, Rduckhts package integration,
-  vendored htslib workflows, SQL and tinytest coverage, wasm/webR
-  constraints, and exact-compatible rewrites of upstream genomics tools.
-  Use when working in github.com/RGenomicsETL/duckhts.
-- `duckhts-rewrite-porting` — Guides exact-compatible rewrites and ports
-  of existing genomics tools into DuckHTS, with pinned upstream
-  validation, attribution, phased scope, and rewrites.bio-style
-  discipline. Use when implementing or maintaining compatibility layers
-  such as mosdepth-, bcftools-, or WisecondorX-aligned behavior in
-  duckhts.
-- `duckhts-wasm-debugging` — Guides wasm, webR, and duckdb-wasm
-  debugging for DuckHTS, including artifact verification, symbol/export
-  checks, browser-runtime constraints, and package-vs-runtime
-  distinctions. Use when debugging DuckHTS in webR, browser wasm, or
-  duckdb-wasm environments.
-- `ducknng-development` — Guides development in the ducknng pure-C
-  DuckDB extension: registry-derived RPC manifests, NNG/HTTP/WebSocket
-  carrier boundaries, Arrow IPC and Quack payloads, explicit
-  service/session/AIO lifetime, bounded security contracts, stable and
-  unstable DuckDB API audits, SQL/property/browser/interop tests, and
-  generated function catalogs. Use when working in
-  sounkou-bioinfo/ducknng.
-- `duckqc-design` — Guides design of a DuckDB-native, SQL-first
-  sequencing QC system inspired by RustQC and related upstream tools,
-  with one-pass analytics, reusable kernels, compatibility outputs, and
-  careful threading and summary design. Use when planning DuckQC-style
-  functionality.
-- `ducktinycc-development` — Guides development in DuckTinyCC: in-memory
-  TinyCC state and relocated artifact lifetime, generated scalar-UDF
-  wrappers, recursive DuckDB/C descriptors, embedded runtime assets,
-  trusted native-code boundaries, allocator domains, SQL stability,
-  source-split conventions, upstream precedents, and extension/community
-  tests. Use when working in sounkou-bioinfo/DuckTinyCC.
-- `duckvep-design` — Guides design of a DuckDB-native variant effect
-  prediction system, including consequence prediction kernels,
-  transcript/annotation caches, haplotype-aware consequence paths,
-  bcftools csq alignment opportunities, and careful planning for indexes
-  and metadata stores. Use when exploring DuckVEP-style functionality.
-- `genomics-sql-rewrites` — Guides genomics tool rewrites and ports that
-  target SQL-native, DuckDB-centered execution using reusable native
-  kernels, streaming readers, parallel scans, alternative file formats,
-  and indexed metadata access. Use when designing genomics capabilities
-  as DuckDB extensions or SQL-first libraries.
-- `library-first-bio-rewrites` — Guides AI-assisted bioinformatics
-  rewrites with a library-first, low-dependency mindset, emphasizing
-  battle-tested libraries, C and FFI reuse, innovative composition,
-  portable deployment, and single-pass statistics. Use when designing
-  rewrites that should avoid dependency bloat and maximize reuse.
-- `r-c-anti-slop` — Audits R and C source with the vendored Tree-sitter
-  anti-slop analyzer, then removes only proven redundant guards, no-op
-  handlers, and host-unsafe C assertions while preserving real
-  invariants. Use when reviewing or simplifying defensive R/C code.
-- `r-package-development` — Guides creation, maintenance, checking,
-  testing, documenting, and releasing R packages using project-native
-  workflows such as Makefiles, tinytest, roxygen2, base R, and optional
-  tools like usethis, pkgdown, air, or jarl. Use when working on any R
-  package or CRAN-style package workflow.
-- `rducks-development` — Guides development in the Rducks R package and
-  bundled DuckDB C extension, including strict execution plans, R-thread
-  and SEXP ownership, direct versus Quack/NNG worker marshalling, exact
-  DuckDB unstable-ABI artifacts, runtime capability probes, generated
-  catalogs, wasm, and tarball-based tinytest/check workflows. Use when
-  working in sounkou-bioinfo/Rducks.
-- `rfmalloc-development` — Guides development in the Rfmalloc monorepo
-  and its Rfmalloc, Rggml, Rgguf, Rllm, Rpgen, and RfmallocStatgen
-  packages: typed out-of-core storage, C-callable contracts, backend
-  fallback, generated GGML vendoring, architecture programs, numerical
-  oracles, cross-package checks, and GPU-rig evidence. Use when working
-  in sounkou-bioinfo/Rfmalloc.
-- `rho-development` — Guides development in the RGenomicsETL/Rho
-  monorepo: evidence-driven dialectical refinement, modern R and
-  functional S7 OOP, s7contract interfaces, asynchronous tasks and
-  streams, explicit capabilities, provider and session protocols,
-  authored Rmd tests, and monorepo gates. Use when working in Rho or its
-  rho.\* packages.
-- `s7-development` — Guides development of R code and packages using S7
-  classes, generics, methods, validators, properties, compatibility
-  layers, and package integration. Use when designing or maintaining
-  S7-based APIs or migrating S3/S4 code toward S7.
-- `sounkou-engineering-style` — Applies the working and coding style
-  used across sounkou-bioinfo and RGenomicsETL projects: one-controller
-  conceptual control without agent/worktree sprawl, evidence-driven
-  dialectical design, one semantic authority, explicit C ownership and
-  bounds, idiomatic R and S7, composable SQL, focused changes, and
-  executable proof. Use when working in DuckHTS, Rducks, Rfmalloc,
-  ducknng, DuckTinyCC, Rho, or when the user asks for "our style".
+- `bioinformatics-cache-and-index-design` — Choose cache, index, and
+  annotation-store formats from measured bioinformatics access patterns.
+  Use when startup, repeated exact/interval lookup, provenance, or
+  serving layout is the design problem.
+- `bioinformatics-ffi-and-bindings` — Design bindings around mature
+  native bioinformatics libraries. Use when exposing a C/C++ core to R,
+  Python, SQL, wasm, or an embedded runtime instead of rewriting it.
+- `bioinformatics-rewrite-porting` — Define and validate a compatible
+  port of an existing bioinformatics tool. Use when behavior or output
+  claims target a named upstream implementation.
+- `bioinformatics-single-pass-analytics` — Design fused bioinformatics
+  scans that compute several validated outputs from one
+  parse/decompression pass. Use when repeated I/O dominates and metrics
+  share real data locality.
+- `duckdb-c-extension-architecture` — Design and harden C DuckDB
+  extensions across ownership, concurrency, API stability, vendoring,
+  catalogs, and tests. Use for extension architecture or cross-cutting
+  native changes, not a one-line patch.
+- `duckdb-c-extension-r-bindings` — Package a DuckDB C extension for R.
+  Use when installed artifacts, bootstrap/configure, SQL wrappers,
+  generated docs, CRAN behavior, or native-versus-R ownership is
+  central.
+- `duckhts-development` — Work in RGenomicsETL/duckhts across the C
+  extension, Rduckhts, tests, docs, vendoring, benchmarks, and
+  compatible upstream rewrites. Use for any DuckHTS implementation
+  change.
+- `duckhts-wasm-debugging` — Debug DuckHTS in webR, browser workers,
+  Emscripten, or duckdb-wasm. Use when the failing artifact or runtime
+  is wasm rather than native host DuckDB/R.
+- `ducknng-development` — Work in sounkou-bioinfo/ducknng on RPC
+  manifests, NNG/HTTP/WebSocket carriers, Quack/Arrow payloads,
+  session/AIO lifetime, security, DuckDB APIs, catalogs, and interop
+  tests.
+- `duckqc-design` — Design DuckDB-native sequencing QC with queryable
+  metrics and fused scans. Use for DuckQC-style planning, metric
+  contracts, reduction/threading, and compatibility outputs.
+- `ducktinycc-development` — Work in sounkou-bioinfo/DuckTinyCC on
+  TinyCC state/artifact lifetime, generated UDF bridges, recursive
+  descriptors, embedded assets, allocator domains, trusted native code,
+  and extension tests.
+- `duckvep-design` — Design DuckDB-native variant consequence
+  prediction. Use when transcript/reference caches, haplotype-aware
+  consequences, bcftools csq reuse, annotation joins, or structured
+  outputs are central.
+- `genomics-sql-rewrites` — Decompose genomics tools into DuckDB
+  readers, native kernels, indexes, and composable SQL. Use for generic
+  SQL-native architecture rather than a repository-specific workflow.
+- `r-c-anti-slop` — Audit R/C source with the repository Tree-sitter
+  analyzer. Use to review redundant guards, private-helper sprawl,
+  condition sprawl, no-op handlers, or host-unsafe C assertions.
+- `r-package-development` — Maintain an R package through
+  DESCRIPTION/NAMESPACE, documentation, tests, native configure/build
+  logic, tarball checks, websites, and release. Use for generic
+  CRAN-style package mechanics.
+- `rducks-development` — Work in sounkou-bioinfo/Rducks on execution
+  plans, R-thread/SEXP ownership, direct and Quack/NNG marshalling,
+  exact DuckDB ABI artifacts, capability probes, generated catalogs,
+  wasm, and package gates.
+- `rfmalloc-development` — Work in the Rfmalloc monorepo on typed
+  out-of-core storage, C-callable contracts, backend fallback, GGML
+  vendoring, architecture programs, numerical oracles, cross-package
+  checks, and GPU evidence.
+- `rho-development` — Work in RGenomicsETL/Rho on evidence-driven
+  refinement, S7/s7contract interfaces, async tasks and streams,
+  capabilities, providers, sessions, authored Rmd tests, and monorepo
+  gates.
+- `s7-development` — Implement or migrate R APIs with S7 classes,
+  properties, validators, generics, multiple dispatch, inheritance,
+  compatibility, and package registration.
+- `sounkou-engineering-style` — Apply shared
+  sounkou-bioinfo/RGenomicsETL engineering rules. Use when the user asks
+  for “our style” or when a project skill delegates authority,
+  ownership, bounds, focused work, and proof here.
 
 ## RLM and R runtime direction
 

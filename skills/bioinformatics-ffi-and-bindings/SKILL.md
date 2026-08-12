@@ -1,122 +1,31 @@
 ---
 name: bioinformatics-ffi-and-bindings
-description: Guides library-first bioinformatics rewrites that expose mature native code through bindings, extensions, FFI, or embedded runtimes across R, Python, SQL, and wasm. Use when building reusable interfaces around existing C/C++ libraries instead of standalone-only rewrites.
+description: Design bindings around mature native bioinformatics libraries. Use when exposing a C/C++ core to R, Python, SQL, wasm, or an embedded runtime instead of rewriting it.
 ---
 
-# Bioinformatics FFI and Bindings
+# Bioinformatics FFI and bindings
 
-Use this skill when the best rewrite path is not a new application binary, but a reusable interface around mature native code.
+## Contract
 
-Typical cases:
+Reuse a stable native core and make the language boundary explicit.
 
-- exposing a C/C++ bioinformatics library to R or Python
-- embedding a library in a database extension
-- building host-language wrappers around native kernels
-- exposing one engine across CLI, SQL, R, Python, and wasm
-- designing FFI-friendly APIs instead of app-only entry points
+- Separate native semantics from wrapper defaults, validation, naming, and display policy.
+- Define ownership for every handle, buffer, string, callback, error, and borrowed view.
+- Keep callbacks small; do not let foreign runtimes retain stack pointers or temporary language objects.
+- Return host-visible errors instead of aborting the host process.
+- Bound all input-driven allocation and length conversion before crossing integer widths.
+- Expose a small C-compatible surface when multiple runtimes must share one core.
+- Keep one semantic implementation; wrappers translate values and policy rather than reimplement algorithms.
+- Treat wasm and threaded hosts as distinct ownership/runtime targets, not compiler flags on a desktop design.
 
-## Core mindset
+## Validation
 
-A strong modernization path is often:
+Test the native oracle and every public wrapper separately:
 
-- keep the proven native core
-- adapt the interfaces
-- expose reusable primitives broadly
-- minimize glue complexity and dependency sprawl
+1. scalar/edge/error cases against the native or upstream oracle;
+2. lifetime tests for close, finalization, repeated load/unload, and callbacks;
+3. wrapper defaults, missing values, vectorization, and type conversion;
+4. installed-artifact or external-client execution, not only in-tree calls;
+5. platform-specific ABI/export behavior.
 
-The innovation may live in the interface layer, not in replacing every algorithm.
-
-## Main principles
-
-### Prefer stable native cores
-
-If an existing C/C++ library already solves the hard algorithmic part well:
-
-- reuse it first
-- wrap it carefully
-- validate it in the new host environment
-
-Do not rewrite the core just because you need a new frontend.
-
-### Design for FFI early
-
-An FFI-friendly core should prefer:
-
-- explicit ownership rules
-- simple structs and buffers at API boundaries
-- narrow, well-defined entry points
-- minimal hidden global state
-- predictable error handling
-
-Avoid leaking host-language assumptions into the native layer.
-
-### Separate kernel from wrapper policy
-
-Keep the native engine focused on core semantics.
-Keep wrapper layers responsible for:
-
-- argument reshaping
-- host-language ergonomics
-- table/data-frame conversions
-- convenience defaults
-- package-specific docs and examples
-
-### One core, many surfaces
-
-Ask whether one validated implementation can be surfaced through:
-
-- CLI
-- R package
-- Python binding
-- DuckDB extension
-- wasm/browser worker
-- service endpoint
-
-This often yields more value than maintaining multiple diverging implementations.
-
-### Keep dependency surface small
-
-Bindings are not free if they drag in a large new stack.
-Prefer interface layers that preserve the portability of the underlying library.
-
-### Validate the wrapper, not just the core
-
-Even if the underlying library is correct, wrappers can still break semantics through:
-
-- type conversion mistakes
-- indexing mismatches
-- ownership bugs
-- string/encoding issues
-- silent truncation or coercion
-
-Test wrapper behavior directly.
-
-## Practical design questions
-
-- What is the narrowest stable native API we can expose?
-- Which data structures should stay native?
-- Which conversions should happen only at the outer layer?
-- What ownership and lifetime rules need to be documented?
-- Can one implementation serve multiple host environments?
-- Does this design still work in constrained targets like CRAN or wasm?
-
-## Good outcomes
-
-- one native engine with multiple bindings
-- explicit error and ownership contracts
-- low dependency burden
-- reusable primitives instead of one-off app logic
-- test coverage at both native and wrapper layers
-
-## Anti-patterns
-
-- wrapper logic duplicated independently across languages
-- hidden ownership or lifetime assumptions
-- host-specific hacks in the native core
-- dependency-heavy interface layers for small gains
-- reimplementing a stable library just to change the frontend
-
-## References
-
-- [Binding design notes](references/binding-design-notes.md)
-- [Validation checklist](references/wrapper-validation-checklist.md)
+Document the native version, supported subset, unsupported semantics, and the exact comparison command. See `references/binding-design-notes.md` for the ownership checklist.

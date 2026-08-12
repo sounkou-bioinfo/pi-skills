@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add a schema-free `context-budget` hook with 12 KiB per-result and 64 KiB aggregate budgets for built-in inspection results. It retains newest evidence, replaces older bodies with rerunnable receipts, and preserves complete stored/UI results.
+- Keep dynamic memory and goal state out of the early system-prompt cache prefix. Stable policies remain in the system prompt; bounded task/goal projections are transient context immediately before the current user message, replace rather than accumulate, and stay frozen through each tool loop.
+- Reduce memory retrieval from the generic 80-row wake to a four-row summary frontier plus at most four task-matched exact notes. Compact automatic goal continuations to one sentence instead of persisting the objective and completion checklist every turn.
+- Consolidate 26 overlapping skills into 20 distinct authorities and rewrite surviving `SKILL.md` contracts from 170K to about 36K characters. Fold generic DuckDB API/catalog/testing/vendoring guidance into one C-extension architecture skill, compatibility rewriting into DuckHTS development, and the library-first umbrella into narrower FFI/rewrite/single-pass authorities.
 - Add a repository-vendored, Tree-sitter-only R/C anti-slop analyzer with a Pi `anti_slop` tool and `/anti-slop` command. It scans source files or whole directories (Git-tracked sources when available), flags structured redundant final returns, no-op R rethrow handlers, duplicate terminating guards, private R-helper direct-call counts requiring justification, condition sprawl, ambiguous `length()` truthiness, empty alternatives, and C runtime assertions that can abort an embedded host; JSON configuration controls rule severity without parser fallback.
 - Add the `r-c-anti-slop` skill and executable R/C analyzer fixtures, including parse-error and no-fallback proof.
 - Add append-only permanent memory backed by SQLite/WAL through DuckDB's

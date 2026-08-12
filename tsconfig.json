@@ -9,5 +9,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["extensions/anti-slop/**/*.ts", "extensions/goals/**/*.ts", "extensions/memory/**/*.ts", "extensions/rlm/**/*.ts"]
+  "include": ["extensions/anti-slop/**/*.ts", "extensions/context-budget/**/*.ts", "extensions/goals/**/*.ts", "extensions/memory/**/*.ts", "extensions/rlm/**/*.ts"]
 }

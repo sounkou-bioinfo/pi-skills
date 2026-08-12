@@ -123,7 +123,7 @@ source_paths <- function(path, language) {
   }, character(1))
   included <- !is.na(inferred) & (language == "auto" | inferred == language)
   paths <- sort(unique(normalizePath(candidates[included], winslash = "/", mustWork = TRUE)))
-  if (!length(paths)) {
+  if (length(paths) == 0L) {
     fail(paste0("No ", if (language == "auto") "R or C" else toupper(language), " source files found under: ", path))
   }
   paths
@@ -145,7 +145,7 @@ read_rule_config <- function(path) {
       fail("Configuration field 'rules' must be an object mapping rule names to warning, error, or off")
     }
     unknown <- setdiff(names(config$rules), names(rule_defaults))
-    if (length(unknown)) fail(paste0("Unknown anti-slop rule(s): ", paste(unknown, collapse = ", ")))
+    if (length(unknown) > 0L) fail(paste0("Unknown anti-slop rule(s): ", paste(unknown, collapse = ", ")))
     for (name in names(config$rules)) {
       severity <- config$rules[[name]]
       if (!is.character(severity) || length(severity) != 1L || !severity %in% c("warning", "error", "off")) {
@@ -299,7 +299,7 @@ r_condition_sites <- function(root) {
     }
     if (!identical(type, "call") || !function_name(node) %in% c("ifelse", "if_else", "dplyr::if_else")) return()
     arguments <- call_argument_nodes(node)
-    if (length(arguments)) {
+    if (length(arguments) > 0L) {
       condition <- node_field(arguments[[1]], "value")
       if (!is.null(condition)) sites[[length(sites) + 1L]] <<- condition
     }
@@ -326,7 +326,7 @@ find_r_final_return <- function(root, path, severity) {
     body <- r_function_body(node)
     if (is.null(body) || !identical(node_type(body), "braced_expression")) return()
     statements <- node_named_children(body)
-    if (!length(statements)) return()
+    if (length(statements) == 0L) return()
     final <- statements[[length(statements)]]
     if (is_r_return_call(final)) {
       findings[[length(findings) + 1L]] <<- new_finding(
@@ -403,7 +403,7 @@ find_r_else_null <- function(root, path, severity) {
 
 find_r_private_helper_usage <- function(root, path, severity, call_counts = NULL) {
   definitions <- r_private_helper_definitions(root)
-  if (!length(definitions)) return(list())
+  if (length(definitions) == 0L) return(list())
   if (is.null(call_counts)) {
     calls <- character()
     walk_tree(root, function(node) {
@@ -472,7 +472,7 @@ find_c_final_void_return <- function(root, path, severity) {
     body <- node_field(node, "body")
     if (is.null(type) || node_name(type) != "void" || is.null(body) || !identical(node_type(body), "compound_statement")) return()
     statements <- node_named_children(body)
-    if (!length(statements)) return()
+    if (length(statements) == 0L) return()
     final <- statements[[length(statements)]]
     if (c_is_return_statement(final) && identical(gsub("[[:space:]]+", "", node_text(final)), "return;")) {
       findings[[length(findings) + 1L]] <<- new_finding(
@@ -520,7 +520,7 @@ find_c_empty_else <- function(root, path, severity) {
     if (is.null(alternative) || !identical(node_type(alternative), "else_clause")) return()
     alternative_children <- node_named_children(alternative)
     if (length(alternative_children) != 1L || !identical(node_type(alternative_children[[1]]), "compound_statement")) return()
-    if (!length(node_named_children(alternative_children[[1]]))) {
+    if (length(node_named_children(alternative_children[[1]])) == 0L) {
       findings[[length(findings) + 1L]] <<- new_finding(
         "c-empty-else", severity,
         "An empty else block has no effect; remove else {}.",
@@ -554,7 +554,7 @@ find_parse_errors <- function(root, path) {
       path, node
     )
   })
-  if (treesitter::node_has_error(root) && !length(findings)) {
+  if (treesitter::node_has_error(root) && length(findings) == 0L) {
     findings[[1]] <- new_finding(
       "parse-error", "error",
       "Tree-sitter could not parse this source exactly; anti-slop did not run style rules.",
@@ -605,7 +605,7 @@ format_text <- function(result) {
     length(result$findings),
     length(result$files)
   )
-  if (!length(result$findings)) return(header)
+  if (length(result$findings) == 0L) return(header)
   lines <- vapply(result$findings, function(finding) {
     sprintf(
       "%s:%d:%d: %s %s: %s\n  %s",
@@ -627,7 +627,7 @@ parse_source <- function(path, language) {
 r_private_helper_call_counts <- function(parsed_sources) {
   calls <- character()
   for (source in parsed_sources) {
-    if (source$language != "r" || length(source$parse_errors)) next
+    if (source$language != "r" || length(source$parse_errors) > 0L) next
     walk_tree(source$root, function(node) {
       if (identical(node_type(node), "call") && startsWith(function_name(node), ".")) {
         calls <<- c(calls, function_name(node))
@@ -638,12 +638,12 @@ r_private_helper_call_counts <- function(parsed_sources) {
 }
 
 analyze_parsed_source <- function(source, rules, private_helper_calls) {
-  findings <- if (length(source$parse_errors)) {
+  findings <- if (length(source$parse_errors) > 0L) {
     source$parse_errors
   } else {
     findings_for_language(source$root, source$language, source$path, rules, private_helper_calls)
   }
-  list(path = source$path, language = source$language, ok = !length(source$parse_errors), findings = findings)
+  list(path = source$path, language = source$language, ok = length(source$parse_errors) == 0L, findings = findings)
 }
 
 main <- function(args = commandArgs(trailingOnly = TRUE)) {

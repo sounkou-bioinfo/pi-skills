@@ -75,8 +75,9 @@ read_skill_meta <- function(path) {
 extension_descriptions <- c(
   `anti-slop` = "Tree-sitter-only, configurable R/C audit for redundant code, private-helper call counts and justification, ambiguous length conditions, empty branches, and host-unsafe C runtime assertions.",
   `background-tasks` = "Named detachable shell tasks with bounded external logs, status/kill tools, a focused TUI dock, and one completion wakeup.",
-  goals = "Codex-style `/goals` and `/goal` session goal loop extension.",
-  memory = "Append-only Semantic-SQL memory in SQLite/WAL with bounded summary-frontier wakeups, historical `as_of`, graph traversal, and DuckDB FTS.",
+  `context-budget` = "Transiently caps large built-in inspection results in model context while preserving full stored/UI results and deterministic recovery guidance.",
+  goals = "Session goal loop with stable policy, transient goal context, compact continuations, and evidence-gated completion.",
+  memory = "Append-only Semantic-SQL memory with cache-safe task retrieval, bounded summary frontiers, historical `as_of`, graph traversal, and DuckDB FTS.",
   rlm = "Detached-by-default single-controller long-context runs with completion wakeups, bounded opt-in recursion, system `Rscript` evaluation, and DuckDB-backed parquet sampling."
 )
 
@@ -139,15 +140,21 @@ cat_bullets(extension_rows)
 
 This package does not ship a subagent/scout/plan/recon swarm and does not create worktrees. The RLM keeps long context outside the model and uses one controller to inspect it. Its default `auto` mode does not recurse; `mode=decompose` is an explicit, shallow, budgeted exception for materially independent contradictions.
 
+Skill discovery uses progressive disclosure, but names and descriptions are always in the system prompt. The inventory therefore keeps one distinct trigger per skill and delegates shared mechanics to a single authority instead of multiplying near-duplicate skills.
+
+The `context-budget` hook prevents broad `read`, `bash`, `grep`, `find`, or `ls` results from consuming the context window immediately after compaction. Each result is capped at 12 KiB with deterministic head/tail evidence; an aggregate 64 KiB budget retains newest inspection results and replaces older bodies with rerunnable receipts. Complete tool results remain stored and visible. Configure `PI_CONTEXT_TOOL_RESULT_BYTES` (4096–51200) and `PI_CONTEXT_TOOL_RESULTS_TOTAL_BYTES` (16384–524288).
+
 Only one RLM run and one child model process are active at a time; at most four active/queued runs are retained. Additional background runs and recursive children queue. RLM starts detached by default, keeps the Pi session interactive, and emits one bounded completion wakeup; set `async=false` only for a short blocking call. This serialization is a hard safety boundary, not a tuning default.
 
 Long-running shell commands use `bg_run`: output stays in bounded external task files while Pi remains interactive, and completion emits one status/path wakeup. This avoids holding a foreground tool call open or repeatedly injecting CI progress into model context.
 
 ### Permanent memory
 
-The `memory` extension keeps one append-only SQLite authority at `~/.pi/agent/memory.sqlite` (override with `PI_MEMORY_DB`). SQLite runs in WAL mode; each Pi process owns an in-memory DuckDB connection attached through DuckDB's SQLite storage extension. Transactions and RDF-shaped statements are the small physical core. Notes, current facts, history, summaries, graph edges, pending compression, bounded wake frontiers, and historical `as_of` projections are SQL views or recursive SQL queries.
+The `memory` extension keeps one append-only SQLite authority at `~/.pi/agent/memory.sqlite` (override with `PI_MEMORY_DB`). SQLite runs in WAL mode; each Pi process owns an in-memory DuckDB connection attached through DuckDB's SQLite storage extension. Transactions and RDF-shaped statements are the small physical core. Notes, current facts, history, summaries, graph edges, pending compression, and historical `as_of` projections are SQL views or recursive SQL queries.
 
-Repeated `(graph, subject, predicate)` statements create inspectable versions rather than rewriting history. `memory sql` selects an explicit transaction or timestamp and exposes `as_of_statement`, `as_of_note`, `as_of_summary`, `node_to_node_statement`, `node_to_value_statement`, `memory_block`, `pending_summary`, and `wake`. Its dedicated read-only connection disables local and network filesystem access, locks DuckDB configuration, and bounds query text, memory, threads, runtime, and returned rows. `recall` maintains a process-local DuckDB FTS projection over exact notes; the SQLite statements remain authoritative. Optional embeddings can therefore remain a replaceable derived projection if a measured need appears.
+The system prompt contains only stable memory policy. Once per user turn, the extension builds a small task-conditioned projection from a four-row summary frontier plus at most four exact FTS matches. The `context` hook inserts that projection immediately before the current user message, after the prior transcript. It is not persisted, does not accumulate, and remains frozen through that turn's tool loop. A memory write therefore changes retrieval on the next user turn without mutating the early system-prompt cache prefix.
+
+Repeated `(graph, subject, predicate)` statements create inspectable versions rather than rewriting history. `memory sql` selects an explicit transaction or timestamp and exposes `as_of_statement`, `as_of_note`, `as_of_summary`, `node_to_node_statement`, `node_to_value_statement`, `memory_block`, `pending_summary`, and `wake`. Its dedicated read-only connection disables local and network filesystem access, locks DuckDB configuration, and bounds query text, memory, threads, runtime, and returned rows. `recall` maintains a process-local DuckDB FTS projection over exact notes; SQLite remains authoritative.
 
 Summary nodes and their `memory:left` / `memory:right` statements form a graph that the agent can walk with recursive SQL or `zoom`. The `graph` column leaves named-graph/fork projections schema-compatible, but this package does not invent branch-head or merge policy before a current consumer needs it.
 
