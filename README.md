@@ -27,6 +27,9 @@ plus skill frontmatter.
 
 ### Extensions
 
+- `anti-slop` — Tree-sitter-only, configurable R/C audit for proven
+  redundant guards, no-op R error handlers, empty branches, and
+  host-unsafe C runtime assertions.
 - `goals` — Codex-style `/goals` and `/goal` session goal loop
   extension.
 - `memory` — Append-only Semantic-SQL memory in SQLite/WAL with bounded
@@ -38,6 +41,18 @@ plus skill frontmatter.
 - `background-tasks` — Named detachable shell tasks with bounded
   external logs, status/kill tools, a focused TUI dock, and one
   completion wakeup.
+
+### Anti-slop AST audit
+
+`anti_slop` and `/anti-slop path/to/source.R` audit one R or C source
+file with the vendored Tree-sitter analyzer. The extension deliberately
+does not use regex or a substitute parser: unavailable R grammar
+packages and parse errors are explicit results. Runtime requirements are
+`treesitter`, `treesitter.r` for R, and
+[treesitter.c](https://github.com/sounkou-bioinfo/treesitter.c) for C;
+optional JSON configuration and machine-readable output use `jsonlite`.
+See the `r-c-anti-slop` skill for its narrow rule scope and review
+workflow.
 
 ### Orchestration discipline
 
@@ -205,6 +220,10 @@ prioritized text, and expose bounded lazy reads for omitted text files.
   battle-tested libraries, C and FFI reuse, innovative composition,
   portable deployment, and single-pass statistics. Use when designing
   rewrites that should avoid dependency bloat and maximize reuse.
+- `r-c-anti-slop` — Audits R and C source with the vendored Tree-sitter
+  anti-slop analyzer, then removes only proven redundant guards, no-op
+  handlers, and host-unsafe C assertions while preserving real
+  invariants. Use when reviewing or simplifying defensive R/C code.
 - `r-package-development` — Guides creation, maintenance, checking,
   testing, documenting, and releasing R packages using project-native
   workflows such as Makefiles, tinytest, roxygen2, base R, and optional

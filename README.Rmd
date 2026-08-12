@@ -73,6 +73,7 @@ read_skill_meta <- function(path) {
 }
 
 extension_descriptions <- c(
+  `anti-slop` = "Tree-sitter-only, configurable R/C audit for proven redundant guards, no-op R error handlers, empty branches, and host-unsafe C runtime assertions.",
   `background-tasks` = "Named detachable shell tasks with bounded external logs, status/kill tools, a focused TUI dock, and one completion wakeup.",
   goals = "Codex-style `/goals` and `/goal` session goal loop extension.",
   memory = "Append-only Semantic-SQL memory in SQLite/WAL with bounded summary-frontier wakeups, historical `as_of`, graph traversal, and DuckDB FTS.",
@@ -129,6 +130,10 @@ extension_rows <- lapply(extension_paths, function(path) {
 })
 cat_bullets(extension_rows)
 ```
+
+### Anti-slop AST audit
+
+`anti_slop` and `/anti-slop path/to/source.R` audit one R or C source file with the vendored Tree-sitter analyzer. The extension deliberately does not use regex or a substitute parser: unavailable R grammar packages and parse errors are explicit results. Runtime requirements are `treesitter`, `treesitter.r` for R, and [treesitter.c](https://github.com/sounkou-bioinfo/treesitter.c) for C; optional JSON configuration and machine-readable output use `jsonlite`. See the `r-c-anti-slop` skill for its narrow rule scope and review workflow.
 
 ### Orchestration discipline
 
