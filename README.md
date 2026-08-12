@@ -192,6 +192,11 @@ prioritized text, and expose bounded lazy reads for omitted text files.
 - `genomics-sql-rewrites` — Decompose genomics tools into DuckDB
   readers, native kernels, indexes, and composable SQL. Use for generic
   SQL-native architecture rather than a repository-specific workflow.
+- `library-first-bio-rewrites` — Apply a library-first, low-dependency
+  stance to bioinformatics rewrites — prefer battle-tested libraries and
+  composition, treat dependency bloat as a real engineering cost, and
+  fuse statistics in one validated pass. Use when designing a rewrite or
+  new tool that should avoid dependency bloat and maximize reuse.
 - `r-c-anti-slop` — Audit R/C source with the repository Tree-sitter
   analyzer. Use to review redundant guards, private-helper sprawl,
   condition sprawl, no-op handlers, or host-unsafe C assertions.

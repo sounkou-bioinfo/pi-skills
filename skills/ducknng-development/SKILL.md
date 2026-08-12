@@ -24,6 +24,7 @@ A carrier changes bytes and framing, not RPC/session/auth semantics.
 - Make server, listener/socket, session, AIO, request, payload, and callback ownership explicit.
 - Never reuse or free AIO/request buffers while callbacks can observe them.
 - Bind session tokens to their owner and fail closed on malformed, oversized, unauthenticated, or cross-session input.
+- `query_open` can mutate state even when opt-in unary `exec` is absent — do not treat it as read-only by default.
 - Bound frames, vectors, recursion, decompression, and retained requests before allocation.
 - Keep unstable DuckDB APIs behind the repository compatibility layer and audit supported versions.
 - Return errors through DuckDB/transport surfaces; never abort the host.

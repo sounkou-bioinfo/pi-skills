@@ -34,10 +34,12 @@ Use deterministic, offline extension builds. Pin/checksum vendors and patch thro
 
 ## Compatibility rewrites
 
-For mosdepth/bcftools/samtools/VEP-like behavior, record upstream version/commit, supported subset, output/error contract, unsupported features, attribution, and exact comparison commands. Read `.sync/` first and validate continuously against pinned upstream behavior. Baseline SQL/tinytest coverage is not a substitute for upstream conformance.
+For mosdepth/bcftools/samtools/VEP-like behavior, record upstream version/commit, supported subset, output/error contract, unsupported features, attribution, and exact comparison commands. Read `.sync/` first and validate continuously against pinned upstream behavior. Baseline SQL/tinytest coverage is not a substitute for upstream conformance. Use `references/rewrite-porting.md` for the full rewrite/porting checklist and documentation obligations.
 
 ## Native invariants
 
-Keep ownership explicit and bound input-driven allocation. Mutable htslib handles, iterators, and caches are per-thread. Do not conflate htslib decompression workers with DuckDB parallelism. Preserve declared VCF-header typing; broken headers require explicit repair layers. Keep coverage counting models on separate surfaces.
+Keep ownership explicit and bound input-driven allocation. Mutable htslib handles, iterators, and caches are per-thread. Do not conflate htslib decompression workers with DuckDB parallelism. Preserve declared VCF-header typing; broken headers require explicit repair layers. Keep coverage counting models on separate surfaces: fixed-width bins use arithmetic, `cgranges` is for irregular interval joins only, and each counting model gets its own function with R wrappers, `functions.yaml` entries, and benchmarks (Phase-10 guidance in `AGENTS.md`).
+
+CSQ/ANN/BCSQ typing rules live in `src/vep_parser.c`, seeded from bcftools mirror behavior; unresolved fields default to `String`, and extending the rules requires updating both SQL and R tests. For WisecondorX/dedup-style streaming work, `FILE_OFFSET` ordering in `read_bam()` matters for exact streaming order reproduction.
 
 For wasm-specific debugging, use `duckhts-wasm-debugging`.

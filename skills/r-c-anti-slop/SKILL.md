@@ -11,6 +11,25 @@ Use `scripts/anti_slop.R` directly or the `anti_slop` Pi tool. Tree-sitter is th
 
 File and directory scans are supported. Git directory scans use tracked R/C sources; other directories recurse over recognized suffixes. Private `.helper()` direct-call counts are scope-wide review evidence; dynamic callback/get calls are intentionally not inferred.
 
+## Rules
+
+R rules, by exact trigger:
+
+- `r-final-return`: a `return(...)` that is the final expression of a braced function (R returns that expression automatically).
+- `r-rethrow-handler`: `tryCatch(..., error = function(e) stop(e))` with a one-argument handler that merely rethrows its caught condition.
+- `r-duplicate-adjacent-guard`: two adjacent `if` statements with the same Tree-sitter expression, a known side-effect-free validation condition, and an earlier `stop()`/`return()` consequence.
+- `r-else-null`: `else NULL` where the `if` is a standalone expression in a braced body, so an absent alternative already yields `NULL`.
+- `r-private-helper-usage`: every top-level private `.name <- function(...)` together with its direct call-site count in the analysis scope; callbacks and `get()` remain dynamic and are not counted.
+- `r-conditional-sprawl`: an `if`, `while`, or `ifelse()`/`if_else()` test with more than three atomic `&&`, `||`, `&`, or `|` clauses — it reports the count and asks for the one decision or admission invariant being expressed.
+- `r-implicit-length-test`: `length(x)` or `!length(x)` used as a condition, relying on numeric-to-logical coercion (`0L` is false, positive lengths are true); use `length(x) == 0L` or `length(x) > 0L` to state the intended cardinality.
+
+C rules, by exact trigger:
+
+- `c-final-void-return`: a final bare `return;` in a `void` function.
+- `c-duplicate-adjacent-guard`: adjacent C `if` statements with the same side-effect-free condition and an earlier direct `return` consequence.
+- `c-empty-else`: `else {}`.
+- `c-runtime-assert`: `assert(...)`. In an embedded extension, determine whether its predicate can depend on user input, allocation, I/O, or a recoverable host condition; replace those cases with an explicit checked branch and host-visible error or status return. A proven internal development invariant may remain, or this rule may be disabled locally.
+
 ## Interpretation
 
 Findings are review prompts, not automatic deletions.

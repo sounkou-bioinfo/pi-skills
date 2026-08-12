@@ -15,9 +15,9 @@ Keep allocator domains explicit: DuckDB, TinyCC, libc, and extension registries 
 
 ## Security and assets
 
-Runtime compilation executes unsandboxed native code. Keep that trusted-code contract explicit; validate shape and bounds but do not claim language sandboxing. Unsafe control-flow tests run in subprocesses.
+Runtime compilation executes unsandboxed native code. Keep that trusted-code contract explicit; validate shape and bounds but do not claim language sandboxing. Unsafe control-flow tests run in subprocesses. Default `-nostdlib` avoids implicit libc resolution and improves self-contained deployment; an include or `extern` declaration does not link a symbol.
 
-Embedded runtime assets are content-addressed and verified before extraction/loading. Preserve deterministic extraction order and provenance.
+Embedded runtime assets are content-addressed and verified before extraction/loading. Preserve deterministic extraction order and provenance. The content key covers the archive plus all manifest names and bytes; otherwise an old extraction tree can be reused incorrectly.
 
 ## Gates
 
