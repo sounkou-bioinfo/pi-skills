@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add a `vscode-path-links` extension that disables Pi OSC 8 hyperlinks in VS Code terminals so native Remote-SSH and WSL path detection handles file clicks.
 - Add a schema-free `context-budget` hook with 12 KiB per-result and 64 KiB aggregate budgets for built-in inspection results. It retains newest evidence, replaces older bodies with rerunnable receipts, preserves complete stored/UI results, and freezes each result's full-vs-receipt fate the first time it is evaluated so previously transmitted content is never rewritten and provider prompt caching stays intact.
 - Keep dynamic memory and goal state out of the early system-prompt cache prefix. Stable policies remain in the system prompt; bounded task/goal projections are transient context immediately before the current user message, replace rather than accumulate, and stay frozen through each tool loop.
 - Reduce memory retrieval from the generic 80-row wake to a four-row summary frontier plus at most four task-matched exact notes. Compact automatic goal continuations to one sentence instead of persisting the objective and completion checklist every turn.

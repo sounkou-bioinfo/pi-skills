@@ -41,9 +41,19 @@ plus skill frontmatter.
 - `rlm` — Detached-by-default single-controller long-context runs with
   completion wakeups, bounded opt-in recursion, system `Rscript`
   evaluation, and DuckDB-backed parquet sampling.
+- `vscode-path-links` — Disables Pi OSC 8 hyperlinks in VS Code
+  terminals so native Remote-SSH and WSL path detection handles file
+  clicks.
 - `background-tasks` — Named detachable shell tasks with bounded
   external logs, status/kill tools, a focused TUI dock, and one
   completion wakeup.
+
+### VS Code terminal path clicks
+
+In VS Code integrated terminals, `vscode-path-links` disables Pi’s OSC 8
+hyperlinks and lets VS Code’s native path detector handle visible paths.
+This avoids local `file://` interpretation for Remote-SSH and WSL file
+clicks; other terminals are unchanged.
 
 ### Anti-slop AST audit
 

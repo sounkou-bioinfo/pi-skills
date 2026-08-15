@@ -78,7 +78,8 @@ extension_descriptions <- c(
   `context-budget` = "Transiently caps large built-in inspection results in model context while preserving full stored/UI results and deterministic recovery guidance.",
   goals = "Session goal loop with stable policy, transient goal context, compact continuations, and evidence-gated completion.",
   memory = "Append-only Semantic-SQL memory with cache-safe task retrieval, bounded summary frontiers, historical `as_of`, graph traversal, and DuckDB FTS.",
-  rlm = "Detached-by-default single-controller long-context runs with completion wakeups, bounded opt-in recursion, system `Rscript` evaluation, and DuckDB-backed parquet sampling."
+  rlm = "Detached-by-default single-controller long-context runs with completion wakeups, bounded opt-in recursion, system `Rscript` evaluation, and DuckDB-backed parquet sampling.",
+  `vscode-path-links` = "Disables Pi OSC 8 hyperlinks in VS Code terminals so native Remote-SSH and WSL path detection handles file clicks."
 )
 
 extension_paths <- expand_pi_entries(pkg$pi$extensions, is_extension_path)
@@ -131,6 +132,10 @@ extension_rows <- lapply(extension_paths, function(path) {
 })
 cat_bullets(extension_rows)
 ```
+
+### VS Code terminal path clicks
+
+In VS Code integrated terminals, `vscode-path-links` disables Pi's OSC 8 hyperlinks and lets VS Code's native path detector handle visible paths. This avoids local `file://` interpretation for Remote-SSH and WSL file clicks; other terminals are unchanged.
 
 ### Anti-slop AST audit
 
