@@ -43,7 +43,7 @@ export function plannerPrompt(input: {
     "- map_chunks(chunkSize, subtaskPrompt): recursively solve over chunks of the context",
     "- decompose(subtasks): recursively ask different questions over the same current context",
     "- repl_eval(code): run bounded JavaScript with a context object and helpers; use this for codebases/files/json/csv/parquet or arbitrary structured inspection",
-    "- For files, use listFiles(pattern), fileInfo(path), await readFile(path), await peekFile(path,start,end), await grepFiles(pattern,limit), and chunkFiles(maxChars); the manifest includes files whose contents were not eagerly loaded",
+    "- For files, listFiles(pattern), fileInfo(path), and chunkFiles(maxChars) are synchronous; do not use await, .then, or .catch on them. Use await readFile(path), await peekFile(path,start,end), and await grepFiles(pattern,limit) for the asynchronous helpers; the manifest includes files whose contents were not eagerly loaded",
     `- Inside repl_eval, callRlm(task, subcontext) is ${input.recursionAllowed ? "available for a specific irreducible contradiction" : "disabled"}`,
     "- Inside repl_eval you can use rLoadCode() to get a ready-to-paste R snippet for loading the current context kind in R",
     "- If the user asks about R loading code, include it in your repl_eval result under a key like rLoadCode so it is visible in the final run summary",
