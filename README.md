@@ -30,6 +30,9 @@ plus skill frontmatter.
 - `anti-slop` — Tree-sitter-only, configurable R/C audit for redundant
   code, private-helper call counts and justification, ambiguous length
   conditions, empty branches, and host-unsafe C runtime assertions.
+- `biomedical-evidence` — One bounded read-only HTTP tool for GWAS
+  Catalog, Open Targets, gpmap, OmicsPred, Europe PMC, LitVar2, Ensembl,
+  GTEx, FinnGen, PheWeb, and ported ClawBio lookups.
 - `codex-web-search` — Native web search through Pi’s existing OpenAI
   Codex authentication, with grounded answers and source URLs.
 - `context-budget` — Transiently caps large built-in inspection results
@@ -37,15 +40,9 @@ plus skill frontmatter.
   deterministic recovery guidance.
 - `goals` — Session goal loop with stable policy, transient goal
   context, compact continuations, and evidence-gated completion.
-- `gwas-catalog-search` — Live GWAS Catalog REST API v2 searches with
-  snake_case filters, ontology-aware traits, bounded pagination, and
-  source URLs.
 - `memory` — Append-only Semantic-SQL memory with cache-safe task
   retrieval, bounded summary frontiers, historical `as_of`, graph
   traversal, and DuckDB FTS.
-- `open-targets-search` — Live Open Targets Platform v4 GraphQL search
-  across targets, diseases, drugs, variants, and studies with schema
-  URLs.
 - `rlm` — Detached-by-default single-controller long-context runs with
   completion wakeups, bounded opt-in recursion, system `Rscript`
   evaluation, and DuckDB-backed parquet sampling.
@@ -177,6 +174,11 @@ prioritized text, and expose bounded lazy reads for omitted text files.
   scans that compute several validated outputs from one
   parse/decompression pass. Use when repeated I/O dominates and metrics
   share real data locality.
+- `biomedical-evidence-search` — Search biomedical evidence resources
+  through one bounded tool, including GWAS Catalog, Open Targets,
+  gpmap/gpmapr, OmicsPred, Europe PMC, LitVar2, Ensembl, GTEx, FinnGen,
+  and PheWeb. Use for variant, gene, trait, study, score, PheWAS, eQTL,
+  or literature lookups.
 - `duckdb-c-extension-architecture` — Design and harden C DuckDB
   extensions across ownership, concurrency, API stability, vendoring,
   catalogs, and tests. Use for extension architecture or cross-cutting
@@ -210,20 +212,11 @@ prioritized text, and expose bounded lazy reads for omitted text files.
 - `genomics-sql-rewrites` — Decompose genomics tools into DuckDB
   readers, native kernels, indexes, and composable SQL. Use for generic
   SQL-native architecture rather than a repository-specific workflow.
-- `gwas-catalog-search` — Query and migrate workflows to the GWAS
-  Catalog REST API v2 with ontology-aware trait filters, gene-set
-  semantics, bounded pagination, and source URLs. Use when searching
-  curated GWAS Catalog studies, associations, variants, publications,
-  genes, or ancestries.
 - `library-first-bio-rewrites` — Apply a library-first, low-dependency
   stance to bioinformatics rewrites — prefer battle-tested libraries and
   composition, treat dependency bloat as a real engineering cost, and
   fuse statistics in one validated pass. Use when designing a rewrite or
   new tool that should avoid dependency bloat and maximize reuse.
-- `open-targets-search` — Search the Open Targets Platform v4 GraphQL
-  API for targets, diseases, drugs, variants, and studies with
-  schema-grounded identifiers and pagination. Use when biomedical entity
-  discovery or Open Targets evidence is needed.
 - `r-c-anti-slop` — Audit R/C source with the repository Tree-sitter
   analyzer. Use to review redundant guards, private-helper sprawl,
   condition sprawl, no-op handlers, or host-unsafe C assertions.
