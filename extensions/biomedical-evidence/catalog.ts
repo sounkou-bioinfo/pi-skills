@@ -27,6 +27,7 @@ export interface ProviderProfile {
 	documentationUrl: string;
 	pathPrefix: string;
 	minimumIntervalMs: number;
+	requestTimeoutMs?: number;
 	status?: "live" | "retired" | "development" | "undocumented";
 	limitation?: string;
 	validateArguments?: (args: Arguments) => void;
@@ -319,6 +320,7 @@ export const PROVIDERS: Record<string, ProviderProfile> = {
 		documentationUrl: "https://www.ebi.ac.uk/gwas/rest/docs/api",
 		pathPrefix: "/gwas/rest/api/v2/",
 		minimumIntervalMs: 70,
+		requestTimeoutMs: 120_000,
 		validateArguments(args) {
 			for (const name of Object.keys(args)) {
 				if (!/^[a-z][a-z0-9_]*$/.test(name)) throw new Error(`GWAS Catalog v2 argument '${name}' must use snake_case`);

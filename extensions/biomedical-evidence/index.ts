@@ -16,6 +16,7 @@ const BiomedicalEvidenceParameters = Type.Object({
 		description: "List providers, describe one provider, or call one or more fixed operations",
 	}),
 	provider: Type.Optional(Type.String({ minLength: 1, description: "Provider to describe when action=describe" })),
+	max_pages: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, description: "Default max_pages for requests that do not set their own value" })),
 	requests: Type.Optional(Type.Array(RequestParameters, {
 		minItems: 1,
 		maxItems: 12,
@@ -49,6 +50,7 @@ function describeProvider(name: string | undefined) {
 		base_url: provider.baseUrl,
 		api_path: provider.pathPrefix,
 		minimum_interval_ms: provider.minimumIntervalMs,
+		request_timeout_ms: provider.requestTimeoutMs ?? 30_000,
 		documentation_url: provider.documentationUrl,
 		limitation: provider.limitation,
 		operations: Object.entries(provider.operations).map(([id, operation]) => ({
@@ -78,13 +80,13 @@ function validateArguments(args: Record<string, ArgumentValue> | undefined): Arg
 	return result;
 }
 
-function prepareCall(input: RequestInput) {
+function prepareCall(input: RequestInput, inheritedMaxPages: number | undefined) {
 	const args = validateArguments(input.arguments as Record<string, ArgumentValue> | undefined);
 	const prepared = prepareOperation(input.provider.trim(), input.operation.trim(), args);
 	return {
 		providerId: input.provider.trim(),
 		operationId: input.operation.trim(),
-		maxPages: input.max_pages ?? 1,
+		maxPages: input.max_pages ?? inheritedMaxPages ?? 1,
 		...prepared,
 	};
 }
@@ -109,7 +111,7 @@ export default function biomedicalEvidenceExtension(pi: ExtensionAPI): void {
 			if (params.action === "describe") return textResult(describeProvider(params.provider?.trim()));
 			if (!params.requests?.length) throw new Error("action=call requires at least one request");
 
-			const calls = params.requests.map(prepareCall);
+			const calls = params.requests.map((request) => prepareCall(request, params.max_pages));
 			const batchBudget = { used: 0, limit: RESPONSE_BUDGET_BYTES };
 			const results = await Promise.all(calls.map(async (call) => {
 				const common = {

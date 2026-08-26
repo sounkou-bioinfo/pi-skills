@@ -133,9 +133,10 @@ export class BiomedicalHttpClient {
 	private async fetchPage(provider: ProviderProfile, request: PreparedRequest, signal: AbortSignal | undefined): Promise<FetchedPage> {
 		for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
 			await this.throttle(provider, signal);
+			const timeoutMs = provider.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
 			const requestSignal = signal
-				? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
-				: AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+				? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+				: AbortSignal.timeout(timeoutMs);
 			const response = await fetch(request.url, {
 				method: request.method,
 				headers: {

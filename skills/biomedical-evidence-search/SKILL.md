@@ -65,11 +65,11 @@ Load [references/resources.md](references/resources.md) for provider-specific co
 For a broad ontology category such as infection-related traits:
 
 1. Resolve the intended parent term with `gwas_catalog/efo_traits` using supported fields such as `efo_trait` or `efo_id`; do not use guessed `search`, `query`, `trait`, or URI parameter names.
-2. Call `gwas_catalog/association_snps` with the resolved `efo_id`, `show_child_trait=true`, `size` up to 500, and a deliberate `max_pages`.
+2. Call `gwas_catalog/association_snps` with the resolved `efo_id`, `show_child_trait=true`, `size` up to 500, and a deliberate `max_pages`. Put `max_pages` inside that request or at the top level as the default for every request in the call.
 3. Use the compact result's `association_total`, `associations_retrieved`, and `complete` fields. Claim "all" only when `complete=true`; otherwise report the exact page/byte bound.
 4. The result deduplicates rsIDs and retains mapped ontology trait labels. Associations without an rsID are counted separately.
 
-This operation is a generic association projection, not an infection-specific workflow. Raw `associations` remains available when full association metadata is required.
+This operation is a generic association projection, not an infection-specific workflow. Raw `associations` remains available when full association metadata is required. GWAS ontology expansion can be expensive, so the provider uses a 120-second request timeout while retaining per-origin request spacing and bounded retries.
 
 ## Literature and snippet boundary
 

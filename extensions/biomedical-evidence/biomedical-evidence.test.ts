@@ -96,7 +96,8 @@ test("rejects unsupported GWAS filters and summarizes association SNPs", async (
 		assert.equal(calls, 0);
 		const result = await tool.execute("summary", {
 			action: "call",
-			requests: [{ provider: "gwas_catalog", operation: "association_snps", arguments: { efo_id: "MONDO_1", show_child_trait: true, size: 1 }, max_pages: 2 }],
+			max_pages: 2,
+			requests: [{ provider: "gwas_catalog", operation: "association_snps", arguments: { efo_id: "MONDO_1", show_child_trait: true, size: 1 } }],
 		});
 		const parsed = JSON.parse(result.content[0].text);
 		assert.equal(parsed.results[0].result.complete, true);
