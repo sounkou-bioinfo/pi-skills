@@ -1,0 +1,627 @@
+---
+title: "Memory, Lode, and LeanContext"
+subtitle: "What pi-skills has today, what the alternatives are, and what integrating them would mean"
+date: "2026-08-16"
+output:
+  litedown::html_format:
+    meta:
+      css: ["@default", "@article", "memory-lode-design.css"]
+    options:
+      toc: true
+      embed_resources: ["https", "local"]
+---
+
+```{r setup, include=FALSE}
+litedown::reactor(
+  echo = FALSE, message = FALSE, warning = FALSE,
+  dev = Sys.getenv("FIGDEV", "svg"), dpi = 72,
+  fig.width = 13.6, fig.height = 5
+)
+
+## Validated light-mode palette (dataviz reference instance)
+SURF <- "#fcfcfb"; INK <- "#0b0b0b"; INK2 <- "#52514e"; MUT <- "#898781"
+GRID <- "#e1e0d9"; BASE <- "#c3c2b7"
+BLU  <- "#2a78d6"; BLU100 <- "#cde2fb"; BLU200 <- "#9ec5f4"; BLU550 <- "#1c5cab"
+ORA  <- "#eb6834"
+
+## Figures are sized in pixels, not inches: the svg device writes
+## inches * 72 px, so 13.6in == 979px, matching the CSS content width.
+## ps = 15 keeps label text at 13-15px on screen instead of 8px.
+blank_plot <- function(xlim, ylim, mar = c(0.2, 0.2, 0.2, 0.2)) {
+  par(mar = mar, bg = SURF, family = "sans", xpd = NA, ps = 15)
+  plot.new(); plot.window(xlim = xlim, ylim = ylim)
+}
+
+## Read a numeric constant straight out of the TypeScript sources, so the
+## figures cannot drift away from the implementation.
+const_num <- function(path, name) {
+  src <- paste(readLines(file.path("..", path), warn = FALSE), collapse = "\n")
+  m <- regmatches(src, regexpr(paste0(name, "\\s*=\\s*[0-9_]+"), src))
+  if (!length(m)) return(NA_integer_)
+  as.integer(gsub("[^0-9]", "", m))
+}
+
+NOTE_BYTES  <- const_num("extensions/memory/store.ts", "MAX_MEMORY_BYTES")
+WAKE_ROWS   <- const_num("extensions/memory/index.ts", "HISTORY_LINE_BUDGET")
+MATCH_ROWS  <- const_num("extensions/memory/index.ts", "TASK_MATCH_LIMIT")
+
+## Measured size of the stable system-prompt policy the two extensions append.
+policy_bytes <- function(path, marker) {
+  x <- readLines(file.path("..", path), warn = FALSE)
+  i <- grep(marker, x, fixed = TRUE)
+  if (!length(i)) return(0L)
+  j <- grep("^`;$|`;\\s*$", x[i:length(x)])[1] + i - 1L
+  sum(nchar(x[i:j], type = "bytes"))
+}
+MEM_POLICY  <- policy_bytes("extensions/memory/index.ts", "PERMANENT MEMORY POLICY")
+GOAL_POLICY <- policy_bytes("extensions/goals/index.ts", "PI GOAL POLICY")
+```
+
+## 0. Summary
+
+Five systems are on the table. Four are external; one is ours.
+
+| System | Substrate | Written by | History | Verdict for us |
+|---|---|---|---|---|
+| **pi-skills `memory`** | SQLite/WAL via DuckDB, append-only statements | agent | per-field, full `as_of` | **the authority — extend it** |
+| **Lode Coding** | `lode/` markdown tree | agent, on request | git only, per file | take the *vocabulary*, reject the files |
+| **LeanContext** | `CONSTITUTION.md` + `MANIFEST.md` + `.context/` | human | none (manual `Status:` line) | take the *tier semantics* and the admission test |
+| **Claude Code CLAUDE.md / rules** | markdown hierarchy | human | git only | take `paths:` glob triggering |
+| **Claude Code auto memory** | `~/.claude/projects/<repo>/memory/` | Claude | `modified` timestamp | take the enforced index budget |
+| **Anthropic CMA memory stores** | server-side documents | either | immutable per-document versions + **redact** | take **redaction** |
+
+Decisions already settled in discussion:
+
+- No `lode/` directory, no markdown sprawl, no VFS.
+- Lode becomes a **vocabulary and a graph scope inside `memory`**, not a second store.
+- Project knowledge reaches git as a **generated single-file export**, never as the authority.
+
+---
+
+## 1. What we have today: the `memory` extension
+
+### 1.1 Physical core
+
+Three tables. Everything else is a view.
+
+```
+memo.transactions (transaction_id, transaction_time, operation, session_id, receipt)
+memo.statements   (transaction_id, ordinal, stanza, subject, predicate,
+                   object, value, datatype, language, graph)
+memo.memory_meta  (schema_version = "1")   memo.memory_counter (transaction)
+```
+
+`extensions/memory/schema.sql` · `extensions/memory/store.ts`
+
+### 1.2 The one semantic idea: slots supersede, they do not overwrite
+
+A **slot** is `(graph, subject, predicate)`. Appending a statement to an occupied
+slot supersedes the old value without rewriting it, so every field carries its own
+validity interval and the whole store can be replayed at any transaction.
+
+```{r fig-asof, fig.height=5.2}
+slots <- list(
+  list(lab = "lode:covers",      tx = c(3, 11, 18)),
+  list(lab = "lode:verifiedRev", tx = c(5, 14)),
+  list(lab = "lode:status",      tx = c(7))
+)
+AS_OF <- 12; XMAX <- 21
+
+blank_plot(c(-6, XMAX + 0.6), c(0.2, length(slots) + 1.15), mar = c(2.6, 0.2, 0.2, 0.2))
+
+## transaction axis
+segments(0, 0.55, XMAX, 0.55, col = BASE, lwd = 1)
+at <- c(0, 5, 10, 15, 20)
+segments(at, 0.55, at, 0.42, col = BASE, lwd = 1)
+text(at, 0.06, at, col = MUT, cex = 0.86)
+text(XMAX / 2, -0.28, "transaction_id", col = MUT, cex = 0.88)
+
+for (i in seq_along(slots)) {
+  y <- length(slots) - i + 1.25
+  s <- slots[[i]]
+  ends <- c(s$tx[-1], XMAX)
+  text(-0.55, y, s$lab, adj = 1, col = INK2, cex = 0.98, family = "mono")
+  for (k in seq_along(s$tx)) {
+    live <- s$tx[k] <= AS_OF && ends[k] > AS_OF
+    segments(s$tx[k], y, ends[k], y,
+             col = if (live) BLU else BASE, lwd = if (live) 4.5 else 2,
+             lend = "butt")
+    points(s$tx[k], y, pch = 21, bg = if (live) BLU else SURF,
+           col = if (live) BLU else MUT, cex = 1.15, lwd = 1.4)
+  }
+}
+
+segments(AS_OF, 0.72, AS_OF, length(slots) + 0.82, col = ORA, lwd = 1.6, lty = 2)
+text(AS_OF + 0.25, length(slots) + 0.92, "as_of = 12", col = ORA, cex = 0.95, adj = 0)
+
+legend(-6, length(slots) + 1.15, bty = "n", horiz = TRUE, cex = 0.88,
+       text.col = INK2, seg.len = 1.6, lwd = c(4.5, 2), col = c(BLU, BASE),
+       legend = c("current at as_of", "superseded (retained)"))
+```
+
+One `UPDATE` of a single temp row retargets every `as_of_*` view at once:
+
+| View | What it gives | Where |
+|---|---|---|
+| `statement_history` | `valid_from` / `valid_to` per slot, via `lead()` | `schema.sql:71` |
+| `current_statement` | the head of every slot | `schema.sql:87` |
+| `as_of_statement` | the head **as of** a chosen transaction | `session.sql:9` |
+| `memory_query_context` | one temp row (`as_of_transaction`, `line_budget`) | `session.sql:3` |
+
+`session.sql` runs on both the write connection (`store.ts:129`) and the isolated
+read-only `sql` connection (`store.ts:313`), so `memory sql` sees the same views.
+
+### 1.3 Notes, summaries, and the wake frontier
+
+| Layer | Mechanism | Bound |
+|---|---|---|
+| Note | stanza `memory:note/<tx>`, one line | **`{r} NOTE_BYTES` UTF-8 bytes** |
+| Summary tree | every aligned power-of-two block of the note stream, compressed by `nap` | source-hash checked |
+| Wake frontier | recursive binary walk biased toward the present | `line_budget` rows |
+| Recall | process-local DuckDB FTS over `note_statement`, bm25 | rebuilt per watermark |
+| `sql` | read-only connection, no filesystem or network, bounded rows/memory/threads/runtime | hard |
+
+The frontier below is not a sketch — it runs the same recursion as the `wake_frontier`
+CTE in `session.sql`, for `{r} WAKE_ROWS` slots (`HISTORY_LINE_BUDGET`) over 23 notes.
+Old ranges collapse into one summary line; detail sharpens toward the present.
+
+```{r fig-wake, fig.height=3.6}
+wake_frontier <- function(note_count, line_budget) {
+  top <- 1; while (top < note_count) top <- top * 2
+  out <- list()
+  walk <- function(a, b, slots) {
+    if (a >= note_count) return(invisible(NULL))
+    emit <- (b - a == 1) || (b <= note_count && slots <= 1)
+    if (emit) { out[[length(out) + 1L]] <<- c(a, b); return(invisible(NULL)) }
+    if ((b - a) > 1 && (b > note_count || slots > 1)) {
+      mid <- (a + b) %/% 2
+      lslots <- if (note_count <= mid) slots else max(1, slots %/% 3)
+      rslots <- if (slots > 1) max(1, slots - max(1, slots %/% 3)) else 1
+      walk(a, mid, lslots); walk(mid, b, rslots)
+    }
+  }
+  walk(0, top, line_budget)
+  do.call(rbind, out)
+}
+
+N <- 23
+fr <- wake_frontier(N, WAKE_ROWS)
+
+blank_plot(c(-1.4, N + 2.6), c(-1.25, 1.55), mar = c(0.2, 0.2, 0.2, 0.2))
+for (i in seq_len(nrow(fr))) {
+  a <- fr[i, 1]; b <- min(fr[i, 2], N); single <- (b - a) == 1
+  rect(a + 0.08, -0.35, b - 0.08, 0.55,
+       col = if (single) BLU else BLU100,
+       border = if (single) BLU550 else BLU, lwd = 1.2)
+  lab <- if (single) paste0("#", a) else paste0("#", a, "–", b - 1)
+  text((a + b) / 2, 0.10, lab, cex = 0.86,
+       col = if (single) "#ffffff" else BLU550)
+}
+segments(0, -0.62, N, -0.62, col = BASE)
+text(c(0, N), -0.92, c("oldest note", "newest note"), col = MUT, cex = 0.86,
+     adj = c(0, 1))
+text(N / 2, -0.92, paste0(nrow(fr), " rows for ", N, " notes"),
+     col = MUT, cex = 0.86)
+legend(-1.4, 1.55, bty = "n", horiz = TRUE, cex = 0.88, text.col = INK2,
+       pch = 22, pt.cex = 1.5, pt.lwd = 1.2,
+       pt.bg = c(BLU100, BLU), col = c(BLU, BLU550),
+       legend = c("summary of a collapsed range", "raw note, verbatim"))
+```
+
+### 1.4 Where context actually enters the model
+
+This is the part most external systems get wrong, and ours already gets right:
+the cached prefix never moves, and everything task-conditioned is transient.
+
+```{r fig-context, fig.height=6}
+bands <- data.frame(
+  lab  = c("system prompt — stable policy",
+           "transcript (grows)",
+           "<memory_projection>",
+           "<active_goal>",
+           "current user message"),
+  note = c("memory + goal policy, measured below",
+           "prior turns, untouched",
+           paste0(WAKE_ROWS, " frontier rows + ≤", MATCH_ROWS, " FTS matches"),
+           "objective + turn counters",
+           "the task"),
+  kind = c("stable", "stable", "transient", "transient", "now"),
+  stringsAsFactors = FALSE
+)
+h <- 1; gap <- 0.34
+n <- nrow(bands)
+tops <- rev(seq_len(n)) * (h + gap)
+
+blank_plot(c(0, 100), c(0.15, max(tops) + h + 0.7), mar = c(0.2, 0.2, 0.2, 0.2))
+fill <- c(stable = BLU100, transient = "#ffffff", now = "#f1f0ea")
+edge <- c(stable = BLU,    transient = ORA,       now = BASE)
+
+for (i in seq_len(n)) {
+  y <- tops[i]; k <- bands$kind[i]
+  rect(12, y, 62, y + h, col = fill[[k]], border = edge[[k]], lwd = 1.4,
+       lty = if (k == "transient") 2 else 1)
+  text(14, y + h / 2, bands$lab[i], adj = 0, col = INK, cex = 0.96,
+       family = if (startsWith(bands$lab[i], "<")) "mono" else "sans")
+  segments(62, y + h / 2, 65, y + h / 2, col = GRID)
+  text(66, y + h / 2, bands$note[i], adj = 0, col = MUT, cex = 0.88)
+}
+
+## cached-prefix bracket
+yb <- tops[2]; yt <- tops[1] + h
+segments(9.5, yb, 9.5, yt, col = BLU, lwd = 1.4)
+segments(9.5, c(yb, yt), 11, c(yb, yt), col = BLU, lwd = 1.4)
+text(8.6, (yb + yt) / 2, "cached prefix", srt = 90, col = BLU550, cex = 0.88)
+
+## transient bracket
+yb2 <- tops[4]; yt2 <- tops[3] + h
+segments(9.5, yb2, 9.5, yt2, col = ORA, lwd = 1.4)
+segments(9.5, c(yb2, yt2), 11, c(yb2, yt2), col = ORA, lwd = 1.4)
+text(8.6, (yb2 + yt2) / 2, "rebuilt per turn", srt = 90, col = ORA, cex = 0.88)
+
+text(12, max(tops) + h + 0.45, "request order ↓", adj = 0, col = MUT, cex = 0.88)
+```
+
+The projection is keyed on `sessionId : userTimestamp : sha256(prompt)`
+(`index.ts:212`), frozen for the whole tool loop, never persisted, and replaced
+rather than accumulated. A write therefore changes retrieval on the **next** user
+turn without touching the cache prefix. Around it, `context-budget` caps each
+built-in inspection result at 12 KiB and the aggregate at 64 KiB, freezing each
+result's fate the first time it is seen so prompt caching survives.
+
+### 1.5 Limits worth remembering
+
+| Field | Cap |
+|---|---|
+| note text | `{r} NOTE_BYTES` bytes, one line |
+| stanza / subject | 300 bytes |
+| predicate / graph | 200 bytes |
+| object | 500 bytes |
+| statement `value` | one line (no byte cap enforced) |
+| `memory:system` graph | reserved for derived summaries |
+| `SCHEMA_VERSION` | `"1"`, strict equality — a bump breaks existing DBs |
+
+Adding **new views with new names** needs no version bump. Lode needs no new tables.
+
+---
+
+## 2. What Claude Code actually runs (this session, right now)
+
+Four separate systems ship under the name "memory". They are not variants of each other.
+
+### 2.1 CLAUDE.md hierarchy — human instructions
+
+| Scope | Location | Shared with |
+|---|---|---|
+| Managed policy | `/etc/claude-code/CLAUDE.md` (Linux) | everyone on the machine, cannot be excluded |
+| User | `~/.claude/CLAUDE.md` | you, all projects |
+| Project | `./CLAUDE.md` or `./.claude/CLAUDE.md` | the team, via git |
+| Local | `./CLAUDE.local.md` | you, this project (gitignored) |
+
+- Files are **concatenated**, root-of-tree downward, so the most specific is read last. Subdirectory files load lazily when Claude reads a file there.
+- `@path/to/file` imports, relative to the importing file, **max 4 hops**; backticked paths are not imported. Imports do not save context — they still load at launch.
+- `.claude/rules/*.md` with `paths:` glob frontmatter load **only when Claude reads a matching file**. This is the one genuinely lazy tier.
+- Target **under 200 lines**. `claudeMdExcludes` skips other teams' files in a monorepo.
+- Delivered **as a user message after the system prompt**, explicitly not as system prompt. Not enforcement: *"to block an action regardless of what Claude decides, use a PreToolUse hook."*
+
+### 2.2 Auto memory — the system I am running under
+
+Storage for this very session: `/root/.claude/projects/-root-pi-skills/memory/` —
+currently **empty**; nothing has been saved for this repo yet.
+
+| Property | Value |
+|---|---|
+| Scope | derived from the **git repository** — all worktrees and subdirectories share one directory |
+| Sync | machine-local; never shared across machines or cloud |
+| Loaded each session | `MEMORY.md` only, **first 200 lines or 25 KB**, whichever comes first |
+| Topic files | read on demand with ordinary file tools |
+| Retention | excluded from the transcript cleanup sweep |
+| Subagents | separate directory; a fork inherits the parent's |
+| Over budget | the write succeeds, then the harness **returns an error telling Claude to rewrite the index** |
+| Freshness | a `modified` ISO-8601 timestamp is stamped into frontmatter on write |
+
+The instructions I carry in my system prompt right now, verbatim in shape:
+
+```markdown
+---
+name: <short-kebab-case-slug>
+description: <one-line summary, used to decide relevance during recall>
+metadata:
+  type: user | feedback | project | reference
+---
+
+<the fact; for feedback/project, follow with **Why:** and **How to apply:** lines.
+ Link related memories with [[their-name]].>
+```
+
+with these rules attached:
+
+- **One file, one fact.** Types: `user` (who you are), `feedback` (how I should work, with the why), `project` (ongoing work not derivable from code or git), `reference` (URLs, dashboards, tickets).
+- Link liberally with `[[name]]`; a link to a memory that does not exist yet is a marker, not an error.
+- After writing, add **one line** to `MEMORY.md`: `- [Title](file.md) — hook`. The index is loaded every session; never put content there.
+- Check for an existing file covering the fact and update it rather than duplicating. Delete memories that turn out wrong.
+- **Do not save what the repo already records** — code structure, past fixes, git history, CLAUDE.md. If asked to save one of those, ask what was non-obvious and save that instead.
+- Recalled memories arrive inside `<system-reminder>` blocks: background context, not instructions, and true only as of when they were written. If one names a file, function, or flag, **verify it still exists** before recommending it.
+- Convert relative dates to absolute.
+
+Read that list against ours and the overlap is striking: a knowledge-boundary rule,
+one-fact-per-record, a bounded always-loaded index, a staleness warning, and a
+dedupe-before-write rule — the same five things LeanContext specifies in prose and
+we want to specify in SQL.
+
+### 2.3 The API memory tool (`memory_20250818`)
+
+Client-side. Claude issues `view` / `create` / `str_replace` / `insert` / `delete` /
+`rename` against a `/memories` directory; **you implement the backend**. Pairs with
+context editing (`clear_tool_uses_20250919`) and server-side compaction. No history.
+
+This is the only reason a VFS over our SQLite store would ever exist — it is the
+file-shaped interface an API-side agent expects. We are not targeting that surface,
+so it stays unbuilt.
+
+### 2.4 Managed-Agents memory stores
+
+The only Anthropic memory surface with real history.
+
+| Object | ID | Notes |
+|---|---|---|
+| Store | `memstore_` | workspace-scoped, FUSE-mounted at `/mnt/memory/<name>/`, `read_only` or `read_write`, max 8 per session, attached at session create only |
+| Memory | `mem_` | one text document at a `path`, ≤100 KB, `409` on path conflict, optimistic concurrency via `content_sha256` |
+| Version | `memver_` | **immutable snapshot per mutation**: `operation` ∈ created/modified/deleted, `created_by` actor (session / api / user), filterable by session or API key, full content retrievable |
+
+And the operation we do not have:
+
+> **`redact`** — clears `content`, `content_sha256`, `content_size_bytes` and `path`
+> on a historical version while preserving the actor and timestamps.
+
+It exists because of an explicit warning in the docs: *"Never store credentials, API
+keys, or tokens in memory stores… a key written once is replayed into every later
+session that mounts the store."*
+
+---
+
+## 3. Lode Coding
+
+A single ore-vein of project knowledge, maintained by the assistant rather than by hand.
+
+```
+lode/
+  overview.md          # mandatory minimum
+  <area>/overview.md   # per-area, for larger projects
+  <area>/<topic>.md
+  tmp/                 # gitignored scraps
+```
+
+**Session protocol:** seed (tag the relevant lode files) → state the goal →
+orchestrate → review and test → *then* switch to chat mode and ask what changed,
+which entries are affected, and what new entry is needed → commit.
+
+**Stance:** the human keeps architectural ownership. *"Only accept what you are
+prepared to own."* Zero tooling by design — *"a philosophy and process, not a
+technology."*
+
+**Failure mode:** nothing bounds it. No admission test, no size ceiling, no staleness
+check, no retrieval discipline — you tag files by hand. Markdown sprawl is not a risk
+of Lode; it is the expected steady state.
+
+---
+
+## 4. LeanContext
+
+The same idea with the parts Lode leaves out actually specified.
+
+| Tier | File | Rule |
+|---|---|---|
+| Constitution | `CONSTITUTION.md` | always loaded, **hard stops only**, 30–50 lines, ceiling 100. Test: *if the agent misses this once, is the damage irreversible?* |
+| Manifest | `MANIFEST.md` | routing table, 10–15 lines, **pointers only, never content** |
+| Supply | `.context/*.md` | pulled on demand, one topic, <150 lines, **invisible knowledge only** |
+
+**Four rules:** Workbench (only what the operation needs), Shadow Board (perceive
+available context without holding it), Pull (load on demand, not at session start),
+Andon (stop and surface uncertainty rather than guess).
+
+**Knowledge boundary** — the sharpest thing in either framework:
+
+| Out | In |
+|---|---|
+| file layout, naming conventions, dependency structure, build commands | why a decision was made, what was tried and rejected, external constraints the code cannot encode |
+
+**Compaction/demotion:** *"The constitution will bloat. This is certain."* Every line
+gets re-tested; failures move down a tier. Plus staleness checks, dead-entry audits,
+and ADRs in `.context/decisions/` with `Status: Accepted | Superseded | Deprecated`.
+
+**Multi-repo:** a child constitution may not contradict the parent; hard stops flow
+downward; a cloned child `curl`s a snapshot of the parent, with the warning that
+*"a stale parent constitution is worse than none."*
+
+---
+
+## 5. Head to head
+
+| Axis | Lode | LeanContext | CLAUDE.md + rules | Auto memory | CMA stores | **pi-skills memory** |
+|---|---|---|---|---|---|---|
+| Substrate | md tree | md, 3 tiers | md hierarchy | md dir | server docs | **SQLite statements** |
+| Authorship | agent | human | human | Claude | either | agent |
+| Scope | repo | repo + org | 4 layers | git repo | workspace | **graph column** |
+| Always loaded | whatever you tag | constitution + manifest | all ancestors | `MEMORY.md` ≤200 lines | mount note | stable policy only |
+| Lazy tier | none | `.context/` by manifest | `paths:` globs | topic files | files on mount | per-turn projection |
+| Admission test | none | **knowledge boundary** | "would a new teammate need it" | "not derivable from repo" | none | *(to add)* |
+| Size discipline | none | 30/15/150 lines | 200-line target | **enforced, errors on write** | 100 KB/doc | `{r} NOTE_BYTES` B/note |
+| History | git per file | manual `Status:` | git per file | `modified` stamp | **per-document versions** | **per-field `as_of`** |
+| Erasure | `rm` | `rm` | `rm` | `rm` | **`redact`** | *(missing)* |
+| Staleness | none | "automate what you can" | none | none | none | *(computable)* |
+| Query surface | grep | grep | grep | grep | list + filters | **SQL + FTS + graph** |
+
+The axis that decides cost per session is *always loaded*. Ours is the only design
+where that number is a measured constant rather than a target the author is asked
+to respect.
+
+```{r fig-budget, fig.height=5}
+ours <- (MEM_POLICY + GOAL_POLICY) / 1024
+proj <- (WAKE_ROWS * 120 + MATCH_ROWS * NOTE_BYTES) / 1024
+
+d <- data.frame(
+  lab = c("Lode Coding",
+          "auto memory MEMORY.md",
+          "CLAUDE.md (project)",
+          "LeanContext tiers",
+          "pi-skills stable policy",
+          "pi-skills turn projection"),
+  kb  = c(NA, 25, 12, 3.9, ours, proj),
+  src = c("no bound", "documented cap", "derived", "derived", "measured", "bounded"),
+  stringsAsFactors = FALSE
+)
+d$hi <- grepl("^pi-skills", d$lab)
+XM <- 28
+
+blank_plot(c(-13.5, XM + 15), c(0.3, nrow(d) + 0.9), mar = c(3.4, 0.2, 0.2, 0.2))
+axis(1, at = seq(0, 25, 5), col = BASE, col.axis = MUT, col.ticks = BASE,
+     cex.axis = 0.86, lwd = 1, line = -1.2, tck = -0.02)
+text(12.5, -0.55, "KB loaded into every session, before any work", col = MUT, cex = 0.88)
+abline(v = seq(5, 25, 5), col = GRID, lwd = 1)
+
+for (i in seq_len(nrow(d))) {
+  y <- nrow(d) - i + 1
+  text(-0.7, y, d$lab[i], adj = 1, col = if (d$hi[i]) INK else INK2, cex = 0.96)
+  if (is.na(d$kb[i])) {
+    rect(0, y - 0.26, XM - 2.2, y + 0.26, col = "#f4f3ee", border = BASE, lty = 2)
+    arrows(XM - 2.2, y, XM + 1.2, y, length = 0.09, col = MUT, lwd = 1.6)
+    text(XM - 3.0, y, "no bound", col = INK2, cex = 0.88, adj = 1)
+  } else {
+    rect(0, y - 0.26, d$kb[i], y + 0.26,
+         col = if (d$hi[i]) BLU else BLU200,
+         border = if (d$hi[i]) BLU550 else BLU200, lwd = 1)
+    text(d$kb[i] + 0.5, y, sprintf("%.1f KB · %s", d$kb[i], d$src[i]),
+         adj = 0, col = INK2, cex = 0.88)
+  }
+}
+segments(0, 0.55, 0, nrow(d) + 0.45, col = BASE)
+```
+
+*Derived* rows convert the framework's own line ceiling at 60 bytes/line
+(CLAUDE.md 200 lines; LeanContext 50 + 15). *Measured* reads the two policy strings
+straight out of `extensions/memory/index.ts` and `extensions/goals/index.ts`.
+*Bounded* is `{r} WAKE_ROWS` frontier rows plus `{r} MATCH_ROWS` matches at the
+`{r} NOTE_BYTES`-byte note ceiling — the worst case, not an average.
+
+Two further conclusions fall out of the table:
+
+1. On **history and query**, nothing here is close to what the statement log does.
+2. On **erasure**, we are the weakest system in the table. Append-only means a
+   leaked token is permanent and `as_of` faithfully replays it forever.
+
+---
+
+## 6. What integration means, concretely
+
+### 6.1 Option A — Lode as files (rejected)
+
+Add `lode/lode-map.md`, `summary.md`, `terminology.md`, `plans/`, `tmp/`, plus an
+AGENTS.md section per repo. Rejected for three stated reasons: markdown sprawl; no
+history beyond per-file git; and text files are not more portable than one SQLite
+file with a query surface. Nothing below revisits this.
+
+### 6.2 Option B — Lode as vocabulary inside `memory` (recommended)
+
+**Zero new tables.** A lode entry is a set of statements under a distinct stanza
+namespace, so it never enters `note_statement`, the wake frontier, or the summary tree.
+
+```
+graph      project:github.com/RGenomicsETL/duckhts
+subject    lode:entry/vendoring
+```
+
+| Predicate | Value |
+|---|---|
+| `lode:kind` | `hardstop` · `decision` · `constraint` · `invariant` · `term` · `data` · `gap` |
+| `lode:title` | short name |
+| `lode:text` | one line, ≤512 bytes |
+| `lode:authority` | repo paths that win on conflict |
+| `lode:covers` | globs — used for **both** staleness and retrieval |
+| `lode:verifiedRev` / `lode:verifiedNote` | git rev + evidence sentence |
+| `lode:status` | `active` · `retired` · `gap` |
+| `lode:supersedes` / `lode:relatesTo` / `lode:inherits` | object edges, walkable with recursive SQL |
+
+Note the kinds that were **cut**: `area` and `interface`. Both invite exactly the
+inferable description LeanContext bans. Every surviving kind is non-inferable by
+construction, and `kind=decision` fails the write without a rejected-alternatives
+value — the ADR shape enforced rather than templated.
+
+| Concern | Mechanism |
+|---|---|
+| Read the map before searching | `SELECT` over active entries in the project graph — cannot go stale, never hand-maintained |
+| Per-claim history | free from `statement_history` |
+| "What did we believe in June" | free from `as_of_statement` |
+| Retirement | append `lode:status = retired`; the entry stays inspectable |
+| Org-wide rules | `lode:inherits` edge to an org graph; no snapshot, no drift |
+| Cross-machine | `memory export --graph project:<id>` → one sorted JSONL at the repo root; `memory import` replays it as one transaction |
+
+### 6.3 Option C — LeanContext as classification (adopt alongside B)
+
+Their three tiers are not three files for us; they are three mechanisms we own.
+
+| LeanContext tier | Their form | Our form |
+|---|---|---|
+| Constitution | `CONSTITUTION.md`, symlinked to `AGENTS.md` | stable system-prompt policy + `sounkou-engineering-style`; per-repo `kind=hardstop` entries |
+| Manifest | hand-maintained table | the lode map, built by `SELECT` |
+| Supply | `.context/*.md` | skill progressive disclosure, FTS recall, `lode open` |
+| Workbench rule | stated | `context-budget`, enforced in bytes |
+| Shadow Board rule | stated | Pi's skill listing |
+| Pull rule | manifest discipline | per-turn projection built from the prompt |
+| Session discipline | prose | `goals`, with evidence-gated completion |
+| Compaction | manual demotion | note stream + summary tree (`nap` / `zoom`) — no equivalent on their side |
+
+Three of their ideas are genuinely new to us:
+
+1. **Knowledge boundary as a write gate.** Refuse entries that restate what the code shows.
+2. **Gaps as rows.** Their bootstrap leaves `<!-- FILL IN: why was this chosen? -->` in a file; ours becomes `lode:status = gap` — a question with no answer, surfaced in the projection until answered. The Andon Rule as queryable state.
+3. **Demotion, not deletion.** A hardstop failing the irreversibility test gets `lode:kind` re-appended as `constraint`; identity and history survive.
+
+### 6.4 What Claude Code contributes
+
+| Borrowing | Their implementation | Ours |
+|---|---|---|
+| **Redaction** | `redact` clears content, keeps actor + timestamps | new `redact` op: null the `value` at `(transaction_id, ordinal)`, keep the row, log the erasure as its own transaction with a reason |
+| **Glob triggering** | `.claude/rules/` with `paths:` loads on matching file reads | entries whose `lode:covers` match files touched this turn join the projection — the Pull Rule, using a field we already store |
+| **Enforced budget** | index over 200 lines / 25 KB → error telling Claude to rewrite it | `entry` write fails when the hardstop cap is exceeded, instead of silently dropping projection rows |
+| **Age on every fact** | `modified` frontmatter stamp | render `transaction_time` (or `verified N commits ago`) in the projection — a claim without its date invites over-trust |
+| **Placement** | CLAUDE.md is a user message *after* the system prompt, even for managed policy | keep hardstops in the per-turn projection, **not** the cache prefix |
+
+That last row reverses an earlier recommendation of mine, and it comes with a free
+property: Claude Code must specially re-read and re-inject project CLAUDE.md after
+`/compact`, and admits nested files and `paths:` rules are *not* re-injected — a
+projection rebuilt from SQL every user turn simply reappears.
+
+---
+
+## 7. Implementation delta
+
+| Slice | Change | Files |
+|---|---|---|
+| 1 | `entry()`, `retire()`, `redact()`; `as_of_lode_field` / `as_of_lode_entry` views; `lode_map` / `lode_entry` queries; tool ops `entry` / `retire` / `redact` / `lode`; project-graph resolution from the normalized git remote | `store.ts`, `session.sql`, `operations.sql`, `index.ts` |
+| 2 | Projection section (map + task matches + `covers` matches + open gaps + age), FTS union over lode text, status line | `index.ts`, `operations.sql` |
+| 3 | Staleness: `verifiedRev`, one `git diff --name-only <rev> HEAD` per distinct rev, glob match in Node; unknown rev → `unknown`, never "fresh"; `verify` requires an evidence note | `index.ts` |
+| 4 | `export` / `import` round trip, single sorted JSONL | `store.ts`, `index.ts` |
+| 5 | ~5 lines of lode policy in the stable memory prompt; a short "project knowledge" section in `sounkou-engineering-style`. **No new skill.** | `index.ts`, `skills/` |
+| 6 | Description entry at `README.Rmd:75`, `npm run render:readme`, CHANGELOG | `README.Rmd`, `CHANGELOG.md` |
+
+Tests to add in `memory.test.ts`: field supersede + `as_of` at an older transaction;
+retire hides from the map but keeps history; **note stream and summary tree
+unaffected by lode statements**; redact nulls content but preserves the transaction;
+export → import is idempotent; FTS finds an entry.
+
+No `SCHEMA_VERSION` bump: no new tables, and the new views carry new names.
+
+---
+
+## 8. Open decisions
+
+1. **Multi-valued `lode:covers`.** Slot semantics means one statement per predicate. A space-separated glob list keeps supersede exact and diffs readable; set membership via object nodes would need tombstones. Proposed: delimited value, capped.
+2. **Org graph naming.** `org:RGenomicsETL` versus a normalized org URL. Affects `lode:inherits` and the export.
+3. **Where the export lives.** `lode.jsonl` at the repo root versus `.pi/lode.jsonl`.
+4. **Redaction scope.** Value only, or also subject/predicate when those leak — a path can be the secret.
+
+---
+
+*Rendered with litedown `{r} as.character(packageVersion("litedown"))`.
+Figures are computed from the sources in this repository; re-render with*
+`Rscript -e 'litedown::fuse("docs/memory-lode-design.Rmd")'`.

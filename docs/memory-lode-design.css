@@ -1,0 +1,16 @@
+/* Wider measure than litedown's 800px default: this document is table-heavy
+   (a 7-column comparison) and its figures are ~980px wide. */
+body { max-width: 1100px; }
+.body { padding: 1.2em 1.6em; }
+
+/* Figures: never upscale past their intrinsic size, always centred. */
+img, svg { max-width: 100%; height: auto; display: block; margin: 1.4em auto; }
+
+/* Tables: let wide ones scroll rather than crush their columns. */
+table { font-size: 0.94em; border-collapse: collapse; }
+th, td { padding: 0.34em 0.55em; vertical-align: top; }
+thead th { border-bottom: 1px solid #c3c2b7; }
+tbody tr + tr td { border-top: 1px solid #e1e0d9; }
+
+h2 { margin-top: 2.2em; }
+code { font-size: 0.93em; }
