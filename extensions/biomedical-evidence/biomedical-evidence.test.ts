@@ -70,6 +70,47 @@ test("calls declared provider operations and preserves source receipts", async (
 	}
 });
 
+test("rejects unsupported GWAS filters and summarizes association SNPs", async () => {
+	const tool = registeredTool();
+	const originalFetch = globalThis.fetch;
+	let calls = 0;
+	globalThis.fetch = async () => {
+		calls += 1;
+		const payload = calls === 1
+			? {
+				_embedded: { associations: [{ efo_traits: [{ efo_id: "MONDO_1", efo_trait: "infection" }], snp_allele: [{ rs_id: "rs2" }, { rs_id: "rs1" }] }] },
+				_links: { next: { href: "https://www.ebi.ac.uk/gwas/rest/api/v2/associations?efo_id=MONDO_1&page=1&size=1" } },
+				page: { totalElements: 2 },
+			}
+			: {
+				_embedded: { associations: [{ efo_traits: [{ efo_id: "MONDO_2", efo_trait: "viral infection" }], snp_allele: [{ rs_id: "rs1" }] }] },
+				page: { totalElements: 2 },
+			};
+		return new Response(JSON.stringify(payload), { status: 200 });
+	};
+	try {
+		await assert.rejects(
+			tool.execute("ignored-filter", { action: "call", requests: [{ provider: "gwas_catalog", operation: "associations", arguments: { reported_trait: "COVID-19" } }] }),
+			/Unsupported argument.*reported_trait/,
+		);
+		assert.equal(calls, 0);
+		const result = await tool.execute("summary", {
+			action: "call",
+			requests: [{ provider: "gwas_catalog", operation: "association_snps", arguments: { efo_id: "MONDO_1", show_child_trait: true, size: 1 }, max_pages: 2 }],
+		});
+		const parsed = JSON.parse(result.content[0].text);
+		assert.equal(parsed.results[0].result.complete, true);
+		assert.equal(parsed.results[0].result.unique_snp_count, 2);
+		assert.deepEqual(parsed.results[0].result.snps, [
+			{ rs_id: "rs1", traits: ["infection [MONDO_1]", "viral infection [MONDO_2]"] },
+			{ rs_id: "rs2", traits: ["infection [MONDO_1]"] },
+		]);
+		assert.equal(parsed.results[0].pages, undefined);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
+
 test("serializes and spaces requests to the same origin", async () => {
 	const tool = registeredTool();
 	const originalFetch = globalThis.fetch;

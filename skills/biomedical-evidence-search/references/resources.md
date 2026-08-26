@@ -20,7 +20,7 @@ Always call `biomedical_search` with `action=describe` for the current executabl
 
 ## GWAS Catalog v2
 
-Use filters directly on resources rather than v1 `search/findBy...` paths. Parameters use snake_case. For ontology traits, select `show_child_traits=true` or `false` deliberately and prefer an ontology ID for precise retrieval. For gene searches, v2's default set differs from legacy v1; use `extended_geneset=true` only when that broader behavior is intended.
+Use filters directly on resources rather than v1 `search/findBy...` paths. Parameters use snake_case and are enumerated by `action=describe`; unsupported filters are rejected because GWAS v2 can silently ignore unknown query names. For ontology traits, select the live OpenAPI parameter `show_child_trait=true` or `false` deliberately and prefer an ontology ID for precise retrieval. For gene searches, v2's default set differs from legacy v1; use `extended_geneset=true` only when that broader behavior is intended.
 
 The shared client follows API-provided HAL next links only up to `max_pages`; the host remains responsible for network admission. The documented 15-query-per-second limit is reflected by per-origin serialization and 70 ms minimum spacing.
 

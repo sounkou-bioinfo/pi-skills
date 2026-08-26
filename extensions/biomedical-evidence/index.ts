@@ -57,6 +57,7 @@ function describeProvider(name: string | undefined) {
 			availability: operation.availability ?? "live",
 			required_arguments: operation.required ?? [],
 			default_arguments: operation.defaults,
+			supported_arguments: operation.supportedArguments,
 			pagination: operation.pagination,
 			limitation: operation.limitation,
 		})),
@@ -119,12 +120,15 @@ export default function biomedicalEvidenceExtension(pi: ExtensionAPI): void {
 				};
 				try {
 					const pages = await client.fetchPages(call.provider, call.operation, call.request, call.maxPages, signal, batchBudget);
+					const summary = call.operation.summarize?.(pages.map((page) => page.payload));
 					return {
 						...common,
 						status: "ok",
 						pages_fetched: pages.length,
 						source_urls: pages.map((page) => page.url),
-						pages: pages.map(({ url, payload }) => ({ url, payload })),
+						...(summary === undefined
+							? { pages: pages.map(({ url, payload }) => ({ url, payload })) }
+							: { result: summary }),
 					};
 				} catch (error) {
 					return {

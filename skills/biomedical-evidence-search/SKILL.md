@@ -48,7 +48,7 @@ Raw upstream JSON is retained deliberately. Do not normalize heterogeneous assoc
 
 ## Resource choice
 
-- **GWAS Catalog v2:** literature-curated top associations, studies, variants, traits, publications, genes, and ancestries. Use snake_case filters, explicit `show_child_traits`, and explicit `extended_geneset` when reproducing legacy gene behavior.
+- **GWAS Catalog v2:** literature-curated top associations, studies, variants, traits, publications, genes, and ancestries. `describe` lists the live OpenAPI filters and the tool rejects unsupported names rather than accepting silently ignored parameters. Use the current `show_child_trait` filter explicitly, and use `extended_geneset` only when reproducing legacy gene behavior.
 - **Open Targets v4:** cross-entity search, variant annotations, and credible-set context. An integrated association score is not a GWAS Catalog record or a clinical recommendation.
 - **gpmap/gpmapr:** genotype–phenotype map traits, genes, regions, variants, LD, pleiotropy, and uploaded GWAS metadata. Use the R package for uploads and archive/TSV workflows.
 - **OmicsPred:** molecular prediction scores, performance, PheWAS, cohorts, platforms, datasets, publications, and molecular entities. Its OpenAPI schema is the field/parameter authority.
@@ -59,6 +59,17 @@ Raw upstream JSON is retained deliberately. Do not normalize heterogeneous assoc
 - **eQTL Catalogue v3:** retained only as a retired port; the live endpoint returns HTTP 410, so use current data-access downloads.
 
 Load [references/resources.md](references/resources.md) for provider-specific contracts and [references/gpmapr.md](references/gpmapr.md) for R package workflows. Load [references/upstream-port.md](references/upstream-port.md) only when checking compatibility or provenance for imported client behavior.
+
+## Exhaustive GWAS SNP workflow
+
+For a broad ontology category such as infection-related traits:
+
+1. Resolve the intended parent term with `gwas_catalog/efo_traits` using supported fields such as `efo_trait` or `efo_id`; do not use guessed `search`, `query`, `trait`, or URI parameter names.
+2. Call `gwas_catalog/association_snps` with the resolved `efo_id`, `show_child_trait=true`, `size` up to 500, and a deliberate `max_pages`.
+3. Use the compact result's `association_total`, `associations_retrieved`, and `complete` fields. Claim "all" only when `complete=true`; otherwise report the exact page/byte bound.
+4. The result deduplicates rsIDs and retains mapped ontology trait labels. Associations without an rsID are counted separately.
+
+This operation is a generic association projection, not an infection-specific workflow. Raw `associations` remains available when full association metadata is required.
 
 ## Literature and snippet boundary
 

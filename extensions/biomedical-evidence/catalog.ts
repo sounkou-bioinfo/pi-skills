@@ -12,10 +12,12 @@ export interface OperationProfile {
 	description: string;
 	required?: string[];
 	defaults?: Arguments;
+	supportedArguments?: Record<string, string>;
 	pagination?: "hal-next" | "europe-pmc-cursor";
 	availability?: "live" | "retired";
 	limitation?: string;
 	validate?: (payload: unknown) => void;
+	summarize?: (payloads: unknown[]) => unknown;
 	prepare: (provider: ProviderProfile, args: Arguments) => PreparedRequest;
 }
 
@@ -29,6 +31,10 @@ export interface ProviderProfile {
 	limitation?: string;
 	validateArguments?: (args: Arguments) => void;
 	operations: Record<string, OperationProfile>;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function scalar(value: ArgumentValue | undefined, name: string): ArgumentScalar {
@@ -130,6 +136,72 @@ function graphql(
 		},
 	};
 	return operation;
+}
+
+const PAGE_ARGUMENTS = {
+	page: "Zero-based page index",
+	size: "Records per page; GWAS Catalog v2 allows at most 500",
+	sort: "Endpoint-specific sort field",
+	direction: "Sort direction: asc or desc",
+};
+
+const ASSOCIATION_ARGUMENTS = {
+	pubmed_id: "PubMed publication identifier",
+	rs_id: "dbSNP rsID",
+	full_pvalue_set: "Whether full summary statistics are available",
+	accession_id: "GWAS Catalog study accession such as GCST000854",
+	efo_trait: "Exact ontology trait label",
+	efo_id: "Ontology term short form such as EFO_0001060 or MONDO_0005550",
+	show_child_trait: "Include descendants of the requested ontology term",
+	mapped_gene: "Mapped gene symbol",
+	extended_geneset: "Include the broader legacy gene set",
+	...PAGE_ARGUMENTS,
+};
+
+function associationSnpSummary(payloads: unknown[]): unknown {
+	const snps = new Map<string, Set<string>>();
+	let associationTotal: number | undefined;
+	let associationsRetrieved = 0;
+	let associationsWithoutRsid = 0;
+	for (const payload of payloads) {
+		if (!isObject(payload)) continue;
+		if (associationTotal === undefined && isObject(payload.page) && typeof payload.page.totalElements === "number") {
+			associationTotal = payload.page.totalElements;
+		}
+		const embedded = isObject(payload._embedded) ? payload._embedded : undefined;
+		const associations = embedded && Array.isArray(embedded.associations) ? embedded.associations : [];
+		for (const value of associations) {
+			if (!isObject(value)) continue;
+			associationsRetrieved += 1;
+			const traits = new Set<string>();
+			for (const trait of Array.isArray(value.efo_traits) ? value.efo_traits : []) {
+				if (!isObject(trait)) continue;
+				const label = typeof trait.efo_trait === "string" ? trait.efo_trait : undefined;
+				const id = typeof trait.efo_id === "string" ? trait.efo_id : undefined;
+				if (label || id) traits.add(label && id ? `${label} [${id}]` : (label ?? id)!);
+			}
+			const rsids = new Set<string>();
+			for (const allele of Array.isArray(value.snp_allele) ? value.snp_allele : []) {
+				if (isObject(allele) && typeof allele.rs_id === "string" && allele.rs_id.trim()) rsids.add(allele.rs_id.trim());
+			}
+			if (!rsids.size) associationsWithoutRsid += 1;
+			for (const rsid of rsids) {
+				const knownTraits = snps.get(rsid) ?? new Set<string>();
+				for (const trait of traits) knownTraits.add(trait);
+				snps.set(rsid, knownTraits);
+			}
+		}
+	}
+	return {
+		association_total: associationTotal,
+		associations_retrieved: associationsRetrieved,
+		complete: associationTotal === undefined ? undefined : associationsRetrieved >= associationTotal,
+		associations_without_rsid: associationsWithoutRsid,
+		unique_snp_count: snps.size,
+		snps: [...snps.entries()]
+			.sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+			.map(([rs_id, traits]) => ({ rs_id, traits: [...traits].sort() })),
+	};
 }
 
 const OPEN_TARGETS_SEARCH = `query Search($queryString: String!, $entityNames: [String!], $page: Pagination) {
@@ -251,15 +323,82 @@ export const PROVIDERS: Record<string, ProviderProfile> = {
 			for (const name of Object.keys(args)) {
 				if (!/^[a-z][a-z0-9_]*$/.test(name)) throw new Error(`GWAS Catalog v2 argument '${name}' must use snake_case`);
 			}
+			if (args.page !== undefined && (Array.isArray(args.page) || !Number.isInteger(Number(args.page)) || Number(args.page) < 0)) {
+				throw new Error("GWAS Catalog v2 page must be a non-negative integer");
+			}
+			if (args.size !== undefined && (Array.isArray(args.size) || !Number.isInteger(Number(args.size)) || Number(args.size) < 1 || Number(args.size) > 500)) {
+				throw new Error("GWAS Catalog v2 size must be an integer between 1 and 500");
+			}
 		},
 		operations: {
-			associations: get("associations", "Search curated GWAS associations with v2 snake_case filters", { pagination: "hal-next" }),
-			studies: get("studies", "Search curated GWAS studies with v2 snake_case filters", { pagination: "hal-next" }),
-			variants: get("single-nucleotide-polymorphisms", "Search GWAS variants", { pagination: "hal-next" }),
-			publications: get("publications", "Search GWAS publications", { pagination: "hal-next" }),
-			genes: get("genes", "Search GWAS genes", { pagination: "hal-next" }),
-			ancestries: get("ancestries", "Search GWAS ancestry resources", { pagination: "hal-next" }),
-			efo_traits: get("efo-traits", "Search ontology-mapped GWAS traits", { pagination: "hal-next" }),
+			associations: get("associations", "Search curated GWAS associations with validated v2 filters", {
+				pagination: "hal-next",
+				supportedArguments: ASSOCIATION_ARGUMENTS,
+			}),
+			association_snps: get("associations", "Search GWAS associations and return a compact deduplicated rsID/trait result", {
+				pagination: "hal-next",
+				supportedArguments: ASSOCIATION_ARGUMENTS,
+				summarize: associationSnpSummary,
+			}),
+			studies: get("studies", "Search curated GWAS studies with validated v2 filters", {
+				pagination: "hal-next",
+				supportedArguments: {
+					pubmed_id: "PubMed publication identifier",
+					disease_trait: "Free-text reported disease trait",
+					full_pvalue_set: "Whether full summary statistics are available",
+					efo_id: "Ontology term short form",
+					efo_trait: "Exact ontology trait label",
+					accession_id: "GWAS Catalog study accession",
+					cohort: "Discovery-stage cohort",
+					gxe: "Whether the study investigates gene-environment interaction",
+					ancestral_group: "Ancestry category group",
+					no_of_individuals: "Number of individuals",
+					show_child_trait: "Include descendants of the ontology term",
+					mapped_gene: "Mapped gene symbol",
+					extended_geneset: "Include the broader legacy gene set",
+					...PAGE_ARGUMENTS,
+				},
+			}),
+			variants: get("single-nucleotide-polymorphisms", "Search GWAS variants", {
+				pagination: "hal-next",
+				supportedArguments: {
+					rs_id: "dbSNP rsID",
+					bp_location: "Base-pair location",
+					bp_start: "Range start used with bp_end and chromosome",
+					bp_end: "Range end used with bp_start and chromosome",
+					pubmed_id: "PubMed publication identifier",
+					chromosome: "Chromosome",
+					mapped_gene: "Mapped gene symbol",
+					extended_geneset: "Include the broader legacy gene set",
+					...PAGE_ARGUMENTS,
+				},
+			}),
+			publications: get("publications", "Search GWAS publications", {
+				pagination: "hal-next",
+				supportedArguments: {
+					pubmed_id: "PubMed publication identifier",
+					title: "Publication title",
+					first_author: "First author surname and initials",
+					...PAGE_ARGUMENTS,
+				},
+			}),
+			genes: get("genes", "List GWAS genes", {
+				pagination: "hal-next",
+				supportedArguments: { page: PAGE_ARGUMENTS.page, size: PAGE_ARGUMENTS.size, sort: "Sort as property,(asc|desc)" },
+			}),
+			ancestries: get("ancestries", "List GWAS ancestry resources", { pagination: "hal-next", supportedArguments: {} }),
+			efo_traits: get("efo-traits", "Search ontology-mapped GWAS traits", {
+				pagination: "hal-next",
+				supportedArguments: {
+					efo_trait: "Exact ontology trait label",
+					uri: "Full ontology term URI",
+					efo_id: "Ontology term short form",
+					pubmed_id: "PubMed publication identifier",
+					mapped_gene: "Mapped gene symbol",
+					extended_geneset: "Include the broader legacy gene set",
+					...PAGE_ARGUMENTS,
+				},
+			}),
 			study_ancestries: get("studies/{accession_id}/ancestries", "Retrieve ancestries for one GWAS study", { required: ["accession_id"], pagination: "hal-next" }),
 		},
 	},
@@ -452,6 +591,13 @@ export function prepareOperation(providerName: string, operationName: string, ar
 	const operation = provider.operations[operationName];
 	if (!operation) throw new Error(`Unknown operation '${operationName}' for provider '${providerName}'`);
 	provider.validateArguments?.(args);
+	if (operation.supportedArguments) {
+		const allowed = new Set([...Object.keys(operation.supportedArguments), ...(operation.required ?? [])]);
+		const unknown = Object.keys(args).filter((name) => !allowed.has(name));
+		if (unknown.length) {
+			throw new Error(`Unsupported argument(s) for ${providerName}/${operationName}: ${unknown.join(", ")}. Supported arguments: ${[...allowed].sort().join(", ") || "none"}`);
+		}
+	}
 	if (provider.status === "retired" || operation.availability === "retired") {
 		throw new Error(operation.limitation ?? provider.limitation ?? `${provider.label} is retired`);
 	}
