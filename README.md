@@ -32,7 +32,7 @@ plus skill frontmatter.
   conditions, empty branches, and host-unsafe C runtime assertions.
 - `biomedical-evidence` — One bounded read-only HTTP tool for GWAS
   Catalog, Open Targets, gpmap, OmicsPred, Europe PMC, LitVar2, Ensembl,
-  GTEx, FinnGen, PheWeb, and ported ClawBio lookups.
+  GTEx, FinnGen, and PheWeb.
 - `codex-web-search` — Native web search through Pi’s existing OpenAI
   Codex authentication, with grounded answers and source URLs.
 - `context-budget` — Transiently caps large built-in inspection results

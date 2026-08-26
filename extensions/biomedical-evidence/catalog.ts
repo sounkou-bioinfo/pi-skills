@@ -231,7 +231,7 @@ function omicsPredOperations(): Record<string, OperationProfile> {
 }
 
 const retiredEqtl: OperationProfile = {
-	description: "Legacy eQTL Catalogue v3 rsID association lookup ported from ClawBio",
+	description: "Legacy eQTL Catalogue v3 rsID association lookup",
 	required: ["rsid"],
 	availability: "retired",
 	limitation: "The EBI eQTL Catalogue v3 API now returns HTTP 410. Use the current eQTL Catalogue data-access downloads instead.",
@@ -414,7 +414,7 @@ export const PROVIDERS: Record<string, ProviderProfile> = {
 		pathPrefix: "/UKB-TOPMed/api/",
 		minimumIntervalMs: 500,
 		status: "undocumented",
-		limitation: "The ClawBio port supplies the GRCh38 coordinate resolved for the variant; verify assembly against the PheWeb deployment before interpretation.",
+		limitation: "Supply the GRCh38 coordinate resolved for the variant and verify the assembly against the PheWeb deployment before interpretation.",
 		operations: { phewas: coordinateGet("api/variant/", "Retrieve UKB-TOPMed PheWAS results for a variant") },
 	},
 	pheweb_bbj: {

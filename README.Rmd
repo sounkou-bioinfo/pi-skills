@@ -76,7 +76,7 @@ extension_descriptions <- c(
   `anti-slop` = "Tree-sitter-only, configurable R/C audit for redundant code, private-helper call counts and justification, ambiguous length conditions, empty branches, and host-unsafe C runtime assertions.",
   `background-tasks` = "Named detachable shell tasks with bounded external logs, status/kill tools, a focused TUI dock, and one completion wakeup.",
   `codex-web-search` = "Native web search through Pi's existing OpenAI Codex authentication, with grounded answers and source URLs.",
-  `biomedical-evidence` = "One bounded read-only HTTP tool for GWAS Catalog, Open Targets, gpmap, OmicsPred, Europe PMC, LitVar2, Ensembl, GTEx, FinnGen, PheWeb, and ported ClawBio lookups.",
+  `biomedical-evidence` = "One bounded read-only HTTP tool for GWAS Catalog, Open Targets, gpmap, OmicsPred, Europe PMC, LitVar2, Ensembl, GTEx, FinnGen, and PheWeb.",
   `context-budget` = "Transiently caps large built-in inspection results in model context while preserving full stored/UI results and deterministic recovery guidance.",
   goals = "Session goal loop with stable policy, transient goal context, compact continuations, and evidence-gated completion.",
   memory = "Append-only Semantic-SQL memory with cache-safe task retrieval, bounded summary frontiers, historical `as_of`, graph traversal, and DuckDB FTS.",

@@ -58,7 +58,7 @@ Raw upstream JSON is retained deliberately. Do not normalize heterogeneous assoc
 - **GTEx/FinnGen/PheWeb:** source-specific eQTL/PheWAS lookups with explicit assembly conventions.
 - **eQTL Catalogue v3:** retained only as a retired port; the live endpoint returns HTTP 410, so use current data-access downloads.
 
-Load [references/resources.md](references/resources.md) for provider-specific contracts and [references/gpmapr.md](references/gpmapr.md) for R package workflows. Load [references/clawbio-port.md](references/clawbio-port.md) when checking compatibility with the ported clients.
+Load [references/resources.md](references/resources.md) for provider-specific contracts and [references/gpmapr.md](references/gpmapr.md) for R package workflows. Load [references/upstream-port.md](references/upstream-port.md) only when checking compatibility or provenance for imported client behavior.
 
 ## Literature and snippet boundary
 

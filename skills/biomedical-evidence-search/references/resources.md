@@ -40,6 +40,6 @@ LitVar2's public API surface is documented by its web API page and currently inc
 
 ## Port status
 
-The ClawBio eQTL Catalogue v3 client no longer has a live service; retaining a callable facade that silently returns empty data would be false compatibility. The profile is discoverable but fails closed with the current EBI data-access URL.
+The legacy eQTL Catalogue v3 client no longer has a live service; retaining a callable facade that silently returns empty data would be false compatibility. The profile is discoverable but fails closed with the current EBI data-access URL.
 
-FinnGen, GTEx, PheWeb, Ensembl, and the Michigan resolver preserve the upstream request contracts, but this tool returns bounded raw JSON rather than ClawBio's hand-normalized dictionaries. This avoids implying stable common fields across independently versioned services.
+FinnGen, GTEx, PheWeb, Ensembl, and the Michigan resolver preserve the upstream request contracts, but this tool returns bounded raw JSON rather than a hand-normalized cross-provider schema. This avoids implying stable common fields across independently versioned services.

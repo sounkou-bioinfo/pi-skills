@@ -101,7 +101,7 @@ export default function biomedicalEvidenceExtension(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "biomedical_search",
 		label: "Biomedical Evidence Search",
-		description: "List, describe, and query biomedical evidence resources through one bounded read-only HTTP abstraction. Includes GWAS Catalog, Open Targets, gpmap, OmicsPred, Europe PMC, LitVar2, Ensembl, GTEx, FinnGen, PheWeb, and ported ClawBio lookups.",
+		description: "List, describe, and query biomedical evidence resources through one bounded read-only HTTP abstraction. Includes GWAS Catalog, Open Targets, gpmap, OmicsPred, Europe PMC, LitVar2, Ensembl, GTEx, FinnGen, and PheWeb.",
 		parameters: BiomedicalEvidenceParameters,
 		async execute(_toolCallId, params: BiomedicalEvidenceInput, signal) {
 			if (params.action === "list") return textResult({ providers: listProviders() });
