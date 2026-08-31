@@ -3,6 +3,7 @@ import { runRlmEngine } from "./engine.js";
 import { rlmToolParamsSchema, type RlmToolParams } from "./schema.js";
 import { RunStore } from "./runs.js";
 import type { RunRecord, StartRunInput } from "./types.js";
+import { RLM_LUNA_MODEL, RLM_PROMPT_GUIDELINES } from "./policy.js";
 
 const defaultWaitTimeoutMs = 120000;
 const defaultTimeoutMs = 180000;
@@ -16,6 +17,7 @@ export default function extension(pi: ExtensionAPI): void {
     label: "RLM",
     description:
       "Long-context controller with externalized file/data inspection and system-R evaluation. Starts detached by default so the Pi session remains interactive, then emits one bounded completion wakeup. Set async=false only for a short blocking call. Recursion is explicit, shallow, serial, and budgeted.",
+    promptGuidelines: [...RLM_PROMPT_GUIDELINES],
     parameters: rlmToolParamsSchema,
     async execute(_toolCallId, params: RlmToolParams, signal, onUpdate, ctx) {
       const op = params.op ?? "start";
@@ -150,8 +152,10 @@ export function resolveStartInput(params: RlmToolParams, cwd: string): StartRunI
     cwd: params.cwd ?? cwd,
     backend: params.backend ?? "cli",
     async: params.async ?? true,
-    model: params.model ?? "openai-codex/gpt-5.4",
-    subModel: params.subModel ?? "openai-codex/gpt-5.3-codex-spark",
+    model: params.model ?? RLM_LUNA_MODEL,
+    subModel: params.subModel ?? RLM_LUNA_MODEL,
+    thinking: params.thinking,
+    subThinking: params.subThinking,
     mode: params.mode ?? "auto",
     maxDepth: params.maxDepth ?? 1,
     maxNodes: params.maxNodes ?? 4,
@@ -178,7 +182,9 @@ function describeRecord(record: RunRecord): string {
     `status: ${record.status}`,
     `task: ${record.input.task}`,
     `model: ${record.input.model}`,
+    `thinking: ${record.input.thinking ?? "auto"}`,
     `sub_model: ${record.input.subModel}`,
+    `sub_thinking: ${record.input.subThinking ?? "auto"}`,
   ];
   if (record.finishedAt && record.startedAt) lines.push(`duration_ms: ${record.finishedAt - record.startedAt}`);
   if (record.error) lines.push(`error: ${record.error}`);

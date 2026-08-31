@@ -38,6 +38,10 @@ plus skill frontmatter.
 - `context-budget` — Transiently caps large built-in inspection results
   in model context while preserving full stored/UI results and
   deterministic recovery guidance.
+- `expert-discipline` — Cache-safe, idempotent expert decision
+  discipline that tests consequential choices against leading-expert
+  rejection reasons and reports evidence, uncertainty, and material
+  trade-offs without exposing private deliberation.
 - `goals` — Session goal loop with stable policy, transient goal
   context, compact continuations, and evidence-gated completion.
 - `memory` — Append-only Semantic-SQL memory with cache-safe task
@@ -77,6 +81,26 @@ C; optional JSON configuration and machine-readable output use
 `jsonlite`. See the `r-c-anti-slop` skill for its narrow rule scope and
 review workflow.
 
+### Expert decision discipline and cache behavior
+
+`expert-discipline` appends one concise, byte-stable block through
+`before_agent_start`. It preserves the chained base prompt exactly, uses
+a marker to append only once even when handlers are chained or retried,
+and neither reads, transforms, nor persists user messages. For each
+consequential choice, the block asks what would make a leading relevant
+expert reject the candidate, rejects it when that reason applies,
+prefers expert-correct work over merely cheap constraint satisfaction,
+and reports evidence, uncertainty, and material trade-offs while keeping
+private deliberation private.
+
+Enabling the extension changes the system prompt and therefore causes an
+unavoidable cold cache miss. After that, the extension contributes the
+same bounded bytes to each run instead of copying a fresh reminder into
+every user message; it does not itself introduce per-turn prefix
+variation or linear transcript growth. Actual cache reads still depend
+on provider thresholds and expiry plus changes from models, tools,
+context files, or other extensions.
+
 ### Orchestration discipline
 
 This package does not ship a subagent/scout/plan/recon swarm and does
@@ -98,6 +122,22 @@ and replaces older bodies with rerunnable receipts. Complete tool
 results remain stored and visible. Configure
 `PI_CONTEXT_TOOL_RESULT_BYTES` (4096–51200) and
 `PI_CONTEXT_TOOL_RESULTS_TOTAL_BYTES` (16384–524288).
+
+RLM model policy is ordered
+`openai-codex/gpt-5.6-luna < .../gpt-5.6-terra < .../gpt-5.6-sol` in
+both capability and price. Both root and child defaults are Luna: choose
+Luna for bounded extraction/simple work, Terra for multi-step analysis,
+planning, or synthesis, and Sol only for the hardest/high-stakes work.
+`thinking` and `subThinking` accept Pi’s `off` through `max` levels;
+explicit values win, automatic levels use only model tier, role, context
+kind, and a fixed 12,000-character bounded-context threshold, never task
+keywords, and `xhigh`/`max` require explicit selection. At child depth,
+planner, worker, and synthesis calls use `subModel`/`subThinking`.
+Complete role instructions are byte-stable system prompts; task, runtime
+metadata, observations, and iteration remain in user prompts so the RLM
+does not itself invalidate the provider’s system-prefix cache. Actual
+cache reuse remains provider-dependent. Workers cannot change their
+assigned model and report insufficiency when it is inadequate.
 
 Only one RLM run and one child model process are active at a time; at
 most four active/queued runs are retained. Additional background runs
@@ -218,8 +258,9 @@ prioritized text, and expose bounded lazy reads for omitted text files.
   fuse statistics in one validated pass. Use when designing a rewrite or
   new tool that should avoid dependency bloat and maximize reuse.
 - `r-c-anti-slop` — Audit R/C source with the repository Tree-sitter
-  analyzer. Use to review redundant guards, private-helper sprawl,
-  condition sprawl, no-op handlers, or host-unsafe C assertions.
+  analyzer. Use to review redundant guards, helper and validation-layer
+  sprawl, false path threat models, cyclomatic complexity, no-op
+  handlers, or host-unsafe C assertions.
 - `r-package-development` — Maintain an R package through
   DESCRIPTION/NAMESPACE, documentation, tests, native configure/build
   logic, tarball checks, websites, and release. Use for generic

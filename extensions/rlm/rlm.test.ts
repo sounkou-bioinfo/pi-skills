@@ -8,14 +8,72 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { completeWithCli } from "./backends.js";
 import { loadFileContext } from "./engine.js";
 import { notifyWhenComplete, resolveStartInput } from "./index.js";
+import { RLM_LUNA_MODEL, RLM_SOL_MODEL, RLM_TERRA_MODEL, resolveNodePolicy, resolveThinkingLevel } from "./policy.js";
+import { PLANNER_SYSTEM_PROMPT, SYNTHESIS_SYSTEM_PROMPT, WORKER_SYSTEM_PROMPT, plannerPrompt } from "./prompts.js";
 import { evalInRepl } from "./repl.js";
 import { RunStore } from "./runs.js";
 import { evalWithR } from "./system-r.js";
 import type { RlmRunResult, RunRecord, StartRunInput } from "./types.js";
 
-test("RLM starts detached by default but permits an explicit blocking call", () => {
-  assert.equal(resolveStartInput({ task: "inspect", context: "x" }, "/tmp").async, true);
+test("RLM defaults to detached Luna controllers but permits an explicit blocking call", () => {
+  const defaults = resolveStartInput({ task: "inspect", context: "x" }, "/tmp");
+  assert.equal(defaults.async, true);
+  assert.equal(defaults.model, RLM_LUNA_MODEL);
+  assert.equal(defaults.subModel, RLM_LUNA_MODEL);
+  assert.equal(defaults.thinking, undefined);
+  assert.equal(defaults.subThinking, undefined);
   assert.equal(resolveStartInput({ task: "inspect", context: "x", async: false }, "/tmp").async, false);
+});
+
+test("RLM thinking uses static tier, role, and bounded context policy; explicit values win", () => {
+  assert.equal(resolveThinkingLevel({ model: RLM_LUNA_MODEL, role: "worker", contextKind: "text", contextChars: 12_000 }), "minimal");
+  assert.equal(resolveThinkingLevel({ model: RLM_LUNA_MODEL, role: "worker", contextKind: "text", contextChars: 12_001 }), "low");
+  assert.equal(resolveThinkingLevel({ model: RLM_TERRA_MODEL, role: "worker", contextKind: "files", contextChars: 1 }), "medium");
+  assert.equal(resolveThinkingLevel({ model: "gpt-5.6-terra", role: "planner", contextKind: "text", contextChars: 1 }), "medium");
+  assert.equal(resolveThinkingLevel({ model: "gpt-5.6-sol:low", role: "planner", contextKind: "text", contextChars: 1 }), "high");
+  assert.equal(resolveThinkingLevel({ explicit: "off", model: RLM_SOL_MODEL, role: "planner", contextKind: "files", contextChars: 100_000 }), "off");
+  assert.equal(resolveThinkingLevel({ explicit: "xhigh", model: RLM_LUNA_MODEL, role: "worker", contextKind: "text", contextChars: 1 }), "xhigh");
+  assert.equal(resolveThinkingLevel({ explicit: "max", model: RLM_LUNA_MODEL, role: "synthesis", contextKind: "files", contextChars: 1 }), "max");
+
+  for (const model of [RLM_LUNA_MODEL, RLM_TERRA_MODEL, RLM_SOL_MODEL]) {
+    for (const role of ["planner", "worker", "synthesis"] as const) {
+      for (const contextKind of ["text", "files", "csv", "json", "parquet"] as const) {
+        for (const contextChars of [1, 12_000, 12_001, 1_000_000]) {
+          const automatic = resolveThinkingLevel({ model, role, contextKind, contextChars });
+          assert.notEqual(automatic, "xhigh");
+          assert.notEqual(automatic, "max");
+        }
+      }
+    }
+  }
+});
+
+test("child RLM roles route model and effort through subModel and subThinking", () => {
+  const root = resolveNodePolicy({ depth: 0, model: RLM_TERRA_MODEL, subModel: RLM_LUNA_MODEL, thinking: "high", subThinking: "low", role: "synthesis", contextKind: "files", contextChars: 20_000 });
+  const child = resolveNodePolicy({ depth: 1, model: RLM_TERRA_MODEL, subModel: RLM_LUNA_MODEL, thinking: "high", subThinking: "low", role: "planner", contextKind: "files", contextChars: 20_000 });
+  assert.deepEqual(root, { model: RLM_TERRA_MODEL, thinking: "high" });
+  assert.deepEqual(child, { model: RLM_LUNA_MODEL, thinking: "low" });
+});
+
+test("RLM role system prompts are byte-stable while planner runtime data stays in the user prompt", () => {
+  const first = plannerPrompt({ task: "first task", nodeId: "n1", depth: 0, maxDepth: 1, mode: "auto", contextKind: "text", contextChars: 10, observationSummary: "one", remainingNodeBudget: 4, maxBranching: 2, maxChunkChars: 1000, grepLimit: 10, environmentSummary: "text", recursionAllowed: false });
+  const second = plannerPrompt({ task: "second task", nodeId: "n2", depth: 1, maxDepth: 2, mode: "decompose", contextKind: "files", contextChars: 20, observationSummary: "two", remainingNodeBudget: 3, maxBranching: 1, maxChunkChars: 2000, grepLimit: 20, environmentSummary: "files", recursionAllowed: true });
+  assert.notEqual(first, second);
+  for (const prompt of [PLANNER_SYSTEM_PROMPT, WORKER_SYSTEM_PROMPT, SYNTHESIS_SYSTEM_PROMPT]) {
+    assert(!prompt.includes("first task"));
+    assert(!prompt.includes("second task"));
+    assert.match(prompt, /Luna < Terra < Sol/);
+  }
+  assert.match(PLANNER_SYSTEM_PROMPT, /listFiles/);
+  assert.match(PLANNER_SYSTEM_PROMPT, /FINAL_VAR/);
+  assert.match(PLANNER_SYSTEM_PROMPT, /Start from authority/);
+  assert.match(first, /first task/);
+  assert.match(first, /recursive calls are disabled/i);
+  assert.match(second, /second task/);
+  assert.match(second, /callRlm/);
+  assert(Buffer.byteLength(PLANNER_SYSTEM_PROMPT, "utf8") <= 12_000);
+  assert(Buffer.byteLength(WORKER_SYSTEM_PROMPT, "utf8") <= 2_000);
+  assert(Buffer.byteLength(SYNTHESIS_SYSTEM_PROMPT, "utf8") <= 2_000);
 });
 
 test("detached RLM completion emits one bounded follow-up wakeup", async () => {
@@ -106,6 +164,7 @@ test("CLI completion streams JSON events and disables nested orchestration surfa
     process.env.FAKE_PI_ARGS_PATH = argsPath;
     const result = await completeWithCli({
       model: "openai-codex/test",
+      thinking: "low",
       prompt: "test",
       systemPrompt: "controller",
       cwd: root,
@@ -114,15 +173,17 @@ test("CLI completion streams JSON events and disables nested orchestration surfa
     assert.equal(result.exitCode, 0);
     assert.equal(result.text, "bounded result");
     const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
-    for (const flag of ["--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files", "--system-prompt"]) {
+    for (const flag of ["--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files", "--system-prompt", "--thinking"]) {
       assert(args.includes(flag), `missing child isolation flag ${flag}`);
     }
     assert(!args.includes("--append-system-prompt"));
+    assert.equal(args[args.indexOf("--thinking") + 1], "low");
 
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 20).unref();
     const aborted = await completeWithCli({
       model: "openai-codex/test",
+      thinking: "low",
       prompt: "test",
       systemPrompt: "controller",
       cwd: root,

@@ -1,6 +1,6 @@
 ---
 name: r-c-anti-slop
-description: Audit R/C source with the repository Tree-sitter analyzer. Use to review redundant guards, private-helper sprawl, condition sprawl, no-op handlers, or host-unsafe C assertions.
+description: Audit R/C source with the repository Tree-sitter analyzer. Use to review redundant guards, helper and validation-layer sprawl, false path threat models, cyclomatic complexity, no-op handlers, or host-unsafe C assertions.
 ---
 
 # R/C anti-slop
@@ -9,7 +9,7 @@ description: Audit R/C source with the repository Tree-sitter analyzer. Use to r
 
 Use `scripts/anti_slop.R` directly or the `anti_slop` Pi tool. Tree-sitter is the only parser authority. Missing grammars and parse errors are failures; there is no regex or alternate-parser fallback.
 
-File and directory scans are supported. Git directory scans use tracked R/C sources; other directories recurse over recognized suffixes. Private `.helper()` direct-call counts are scope-wide review evidence; dynamic callback/get calls are intentionally not inferred.
+File and directory scans are supported. Git directory scans use tracked R/C sources; other directories recurse over recognized suffixes. Direct-call counts used by helper rules are scope-wide review evidence; dynamic callback/get calls are intentionally not inferred.
 
 ## Rules
 
@@ -20,8 +20,12 @@ R rules, by exact trigger:
 - `r-duplicate-adjacent-guard`: two adjacent `if` statements with the same Tree-sitter expression, a known side-effect-free validation condition, and an earlier `stop()`/`return()` consequence.
 - `r-else-null`: `else NULL` where the `if` is a standalone expression in a braced body, so an absent alternative already yields `NULL`.
 - `r-private-helper-usage`: every top-level private `.name <- function(...)` together with its direct call-site count in the analysis scope; callbacks and `get()` remain dynamic and are not counted.
+- `r-single-use-predicate-helper`: a top-level, side-effect-free predicate helper with exactly one direct call from another assigned function in the analysis scope, regardless of whether its name starts with a dot.
+- `r-scalar-validator-helper`: a dedicated helper that hand-rolls scalar-string validation by composing `is.character()`, `length()`, `is.na()`, and `nzchar()` instead of placing a concise check at a real admission boundary.
+- `r-path-threat-model`: a helper that rejects parent path segments with a `grepl()` string pattern; require distinct producer/consumer principals and privileges rather than importing traversal-security posture into same-principal local R configuration.
 - `r-conditional-sprawl`: an `if`, `while`, or `ifelse()`/`if_else()` test with more than three atomic `&&`, `||`, `&`, or `|` clauses — it reports the count and asks for the one decision or admission invariant being expressed.
 - `r-implicit-length-test`: `length(x)` or `!length(x)` used as a condition, relying on numeric-to-logical coercion (`0L` is false, positive lengths are true); use `length(x) == 0L` or `length(x) > 0L` to state the intended cardinality.
+- `r-cyclomatic-complexity`: a function whose cyclomatic complexity exceeds 15, using `cyclocomp`-compatible contributions for `if`, `for`, `while`, `repeat`, `&&`, and `||`; nested function bodies are scored independently, while `&`, `|`, and `ifelse()` do not add paths.
 
 C rules, by exact trigger:
 
@@ -36,12 +40,12 @@ Findings are review prompts, not automatic deletions.
 
 Preserve:
 
-- scalar admission contracts such as type, cardinality, and missingness checks;
+- concise scalar admission contracts at genuine package, API, serialization, or system boundaries;
 - distinct ownership, allocation, API, and host-error checks;
 - S7 property/validator invariants and `s7contract` admission conformance;
 - cleanup that has an observable resource effect.
 
-Review/remove only proven cases: redundant final returns, no-op rethrow handlers, duplicated adjacent terminating guards, empty alternatives, ambiguous `length(x)` truthiness, unjustified one-use private wrappers, sprawling conditions that hide repeated policy, and C assertions reachable from embedded-host input/runtime paths.
+Review/remove only proven cases: redundant final returns, no-op rethrow handlers, duplicated adjacent terminating guards, empty alternatives, ambiguous `length(x)` truthiness, unjustified one-use predicate chains, translated scalar-validator layers, path-security checks with no privilege boundary, cyclomatically tangled functions, sprawling conditions that hide repeated policy, and C assertions reachable from embedded-host input/runtime paths.
 
 Replace host-unsafe assertions with explicit error propagation, not silent omission.
 

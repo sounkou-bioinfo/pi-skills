@@ -10,8 +10,12 @@ rule_defaults <- c(
   "r-duplicate-adjacent-guard" = "warning",
   "r-else-null" = "warning",
   "r-private-helper-usage" = "warning",
+  "r-single-use-predicate-helper" = "warning",
+  "r-scalar-validator-helper" = "warning",
+  "r-path-threat-model" = "warning",
   "r-conditional-sprawl" = "warning",
   "r-implicit-length-test" = "warning",
+  "r-cyclomatic-complexity" = "warning",
   "c-final-void-return" = "warning",
   "c-duplicate-adjacent-guard" = "warning",
   "c-empty-else" = "warning",
@@ -307,16 +311,106 @@ r_condition_sites <- function(root) {
   sites
 }
 
-r_private_helper_definitions <- function(root) {
+r_top_level_function_definitions <- function(root) {
   definitions <- list()
   for (statement in node_named_children(root)) {
     if (!identical(node_type(statement), "binary_operator") || !node_name(node_field(statement, "operator")) %in% c("<-", "=")) next
     name <- node_field(statement, "lhs")
     definition <- node_field(statement, "rhs")
     if (is.null(name) || is.null(definition) || !identical(node_type(name), "identifier") || !identical(node_type(definition), "function_definition")) next
-    if (startsWith(node_name(name), ".")) definitions[[node_name(name)]] <- statement
+    definitions[[node_name(name)]] <- statement
   }
   definitions
+}
+
+r_private_helper_definitions <- function(root) {
+  definitions <- r_top_level_function_definitions(root)
+  definitions[startsWith(names(definitions), ".")]
+}
+
+r_function_expression <- function(definition) {
+  body <- r_function_body(definition)
+  if (is.null(body)) return(NULL)
+  if (!identical(node_type(body), "braced_expression")) return(body)
+  statements <- node_named_children(body)
+  if (length(statements) == 1L) statements[[1]] else NULL
+}
+
+r_predicate_expression <- function(node, helper_names, require_predicate = FALSE) {
+  node <- r_unwrap_parentheses(node)
+  type <- node_type(node)
+  if (type %in% c("identifier", "integer", "float", "complex", "string", "null", "true", "false")) return(!require_predicate)
+  if (identical(type, "unary_operator")) {
+    return(identical(node_name(node_field(node, "operator")), "!") && r_predicate_expression(node_field(node, "rhs"), helper_names))
+  }
+  if (identical(type, "binary_operator")) {
+    operator <- node_name(node_field(node, "operator"))
+    return(operator %in% c("&&", "||", "&", "|", "==", "!=", "<", ">", "<=", ">=", "%in%") &&
+      all(vapply(node_named_children(node), r_predicate_expression, logical(1), helper_names = helper_names)))
+  }
+  if (!identical(type, "call")) return(FALSE)
+  predicate_calls <- c(
+    "grepl", "identical", "startsWith", "endsWith", "file.exists", "file.access",
+    "length", "nrow", "ncol", "nzchar", "isTRUE", "isFALSE"
+  )
+  name <- function_name(node)
+  if (!name %in% helper_names && !name %in% predicate_calls && !startsWith(name, "is.")) return(FALSE)
+  if (require_predicate && name %in% c("length", "nrow", "ncol", "file.access")) return(FALSE)
+  arguments <- call_argument_nodes(node)
+  all(vapply(arguments, function(argument) r_predicate_expression(node_field(argument, "value"), helper_names), logical(1)))
+}
+
+r_function_call_names <- function(node) {
+  calls <- character()
+  visit <- function(current) {
+    if (identical(node_type(current), "function_definition")) return()
+    if (identical(node_type(current), "call")) calls <<- c(calls, function_name(current))
+    for (child in node_named_children(current)) visit(child)
+  }
+  visit(node)
+  calls
+}
+
+r_assigned_function_name <- function(definition) {
+  assignment <- node_parent(definition)
+  if (is.null(assignment) || !identical(node_type(assignment), "binary_operator")) return("")
+  name <- node_field(assignment, "lhs")
+  if (is.null(name) || !identical(node_type(name), "identifier")) "" else node_name(name)
+}
+
+r_enclosing_assigned_function_name <- function(node) {
+  ancestor <- node_parent(node)
+  while (!is.null(ancestor)) {
+    if (identical(node_type(ancestor), "function_definition")) {
+      name <- r_assigned_function_name(ancestor)
+      if (nzchar(name)) return(name)
+    }
+    ancestor <- node_parent(ancestor)
+  }
+  ""
+}
+
+r_cyclomatic_node_score <- function(node) {
+  type <- node_type(node)
+  if (identical(type, "function_definition")) return(0L)
+  score <- if (identical(type, "if_statement")) {
+    1L
+  } else if (type %in% c("for_statement", "while_statement")) {
+    2L
+  } else if (identical(type, "repeat_statement")) {
+    1L
+  } else if (identical(type, "binary_operator") && node_name(node_field(node, "operator")) %in% c("&&", "||")) {
+    1L
+  } else {
+    0L
+  }
+  children <- Filter(function(child) !identical(node_type(child), "function_definition"), node_named_children(node))
+  score + sum(vapply(children, r_cyclomatic_node_score, integer(1)))
+}
+
+r_cyclomatic_complexity <- function(definition) {
+  body <- r_function_body(definition)
+  1L + if (is.null(body)) 0L else r_cyclomatic_node_score(body)
 }
 
 find_r_final_return <- function(root, path, severity) {
@@ -422,6 +516,111 @@ find_r_private_helper_usage <- function(root, path, severity, call_counts = NULL
       path, definitions[[name]]
     )
   })
+}
+
+find_r_single_use_predicate_helper <- function(root, path, severity, call_scope) {
+  definitions <- r_top_level_function_definitions(root)
+  if (length(definitions) == 0L) return(list())
+  helper_names <- names(definitions)
+  findings <- list()
+  for (name in helper_names) {
+    count <- if (name %in% names(call_scope$counts)) unname(call_scope$counts[[name]]) else 0L
+    callers <- unique(call_scope$callers[[name]] %||% character())
+    if (count != 1L || length(callers) != 1L || identical(callers[[1]], name)) next
+    definition <- node_field(definitions[[name]], "rhs")
+    expression <- r_function_expression(definition)
+    if (is.null(expression) || !r_predicate_expression(expression, helper_names, require_predicate = TRUE)) next
+    findings[[length(findings) + 1L]] <- new_finding(
+      "r-single-use-predicate-helper", severity,
+      sprintf(
+        "Predicate helper %s has one direct call, from %s. This helper chain obscures one admission expression; inline it unless the helper owns an independently reused invariant.",
+        name, callers[[1]]
+      ),
+      path, definitions[[name]]
+    )
+  }
+  findings
+}
+
+find_r_scalar_validator_helper <- function(root, path, severity) {
+  findings <- list()
+  definitions <- r_top_level_function_definitions(root)
+  for (name in names(definitions)) {
+    statement <- definitions[[name]]
+    definition <- node_field(statement, "rhs")
+    expression <- r_function_expression(definition)
+    if (is.null(expression)) next
+    calls <- unique(r_function_call_names(expression))
+    if (!all(c("is.character", "length", "is.na", "nzchar") %in% calls)) next
+    findings[[length(findings) + 1L]] <- new_finding(
+      "r-scalar-validator-helper", severity,
+      sprintf(
+        "Scalar-string helper %s hand-rolls a translated type/cardinality/missingness layer. Put a concise admission check at a real boundary, or rely on the trusted producer contract, instead of composing reusable is_* predicates.",
+        name
+      ),
+      path, statement
+    )
+  }
+  findings
+}
+
+find_r_path_threat_model <- function(root, path, severity) {
+  findings <- list()
+  definitions <- r_top_level_function_definitions(root)
+  for (name in names(definitions)) {
+    statement <- definitions[[name]]
+    definition <- node_field(statement, "rhs")
+    body <- r_function_body(definition)
+    if (is.null(body)) next
+    parent_segment_guard <- FALSE
+    visit <- function(node) {
+      if (identical(node_type(node), "function_definition")) return()
+      if (identical(node_type(node), "call") && identical(function_name(node), "grepl")) {
+        arguments <- call_argument_nodes(node)
+        if (length(arguments) > 0L) {
+          pattern <- node_field(arguments[[1]], "value")
+          pattern_text <- if (is.null(pattern) || !identical(node_type(pattern), "string")) "" else node_text(pattern)
+          if (grepl("\\\\.\\\\.", pattern_text, fixed = TRUE) &&
+              (grepl("/", pattern_text, fixed = TRUE) || grepl("\\\\", pattern_text, fixed = TRUE))) {
+            parent_segment_guard <<- TRUE
+          }
+        }
+      }
+      for (child in node_named_children(node)) {
+        if (!identical(node_type(child), "function_definition")) visit(child)
+      }
+    }
+    visit(body)
+    if (!parent_segment_guard) next
+    findings[[length(findings) + 1L]] <- new_finding(
+      "r-path-threat-model", severity,
+      sprintf(
+        "Path helper %s rejects parent segments as if it crossed a privilege boundary. Document the distinct producer/consumer principals and privileges; same-principal local R config does not justify traversal-security boilerplate.",
+        name
+      ),
+      path, statement
+    )
+  }
+  findings
+}
+
+find_r_cyclomatic_complexity <- function(root, path, severity) {
+  findings <- list()
+  walk_tree(root, function(node) {
+    if (!identical(node_type(node), "function_definition")) return()
+    complexity <- r_cyclomatic_complexity(node)
+    if (complexity <= 15L) return()
+    name <- r_assigned_function_name(node)
+    findings[[length(findings) + 1L]] <<- new_finding(
+      "r-cyclomatic-complexity", severity,
+      sprintf(
+        "R function %s has cyclomatic complexity %d, exceeding 15. Reduce control-flow paths or justify the irreducible decision structure.",
+        if (nzchar(name)) name else "<anonymous>", complexity
+      ),
+      path, node
+    )
+  })
+  findings
 }
 
 find_r_conditional_sprawl <- function(root, path, severity) {
@@ -564,7 +763,7 @@ find_parse_errors <- function(root, path) {
   findings
 }
 
-findings_for_language <- function(root, language, path, rules, private_helper_calls = NULL) {
+findings_for_language <- function(root, language, path, rules, private_helper_calls = NULL, call_scope = NULL) {
   finders <- if (language == "r") {
     list(
       "r-final-return" = find_r_final_return,
@@ -572,8 +771,12 @@ findings_for_language <- function(root, language, path, rules, private_helper_ca
       "r-duplicate-adjacent-guard" = find_r_duplicate_adjacent_guard,
       "r-else-null" = find_r_else_null,
       "r-private-helper-usage" = find_r_private_helper_usage,
+      "r-single-use-predicate-helper" = find_r_single_use_predicate_helper,
+      "r-scalar-validator-helper" = find_r_scalar_validator_helper,
+      "r-path-threat-model" = find_r_path_threat_model,
       "r-conditional-sprawl" = find_r_conditional_sprawl,
-      "r-implicit-length-test" = find_r_implicit_length_test
+      "r-implicit-length-test" = find_r_implicit_length_test,
+      "r-cyclomatic-complexity" = find_r_cyclomatic_complexity
     )
   } else {
     list(
@@ -589,6 +792,8 @@ findings_for_language <- function(root, language, path, rules, private_helper_ca
     if (identical(severity, "off")) next
     findings <- c(findings, if (identical(rule, "r-private-helper-usage")) {
       finders[[rule]](root, path, severity, private_helper_calls)
+    } else if (identical(rule, "r-single-use-predicate-helper")) {
+      finders[[rule]](root, path, severity, call_scope)
     } else {
       finders[[rule]](root, path, severity)
     })
@@ -624,24 +829,28 @@ parse_source <- function(path, language) {
   list(path = path, language = language, root = root, parse_errors = find_parse_errors(root, path))
 }
 
-r_private_helper_call_counts <- function(parsed_sources) {
+r_direct_call_scope <- function(parsed_sources) {
   calls <- character()
+  callers <- list()
   for (source in parsed_sources) {
     if (source$language != "r" || length(source$parse_errors) > 0L) next
     walk_tree(source$root, function(node) {
-      if (identical(node_type(node), "call") && startsWith(function_name(node), ".")) {
-        calls <<- c(calls, function_name(node))
-      }
+      if (!identical(node_type(node), "call")) return()
+      callee <- function_name(node)
+      if (!nzchar(callee)) return()
+      calls <<- c(calls, callee)
+      caller <- r_enclosing_assigned_function_name(node)
+      if (nzchar(caller)) callers[[callee]] <<- c(callers[[callee]], caller)
     })
   }
-  table(calls)
+  list(counts = table(calls), callers = callers)
 }
 
-analyze_parsed_source <- function(source, rules, private_helper_calls) {
+analyze_parsed_source <- function(source, rules, private_helper_calls, call_scope) {
   findings <- if (length(source$parse_errors) > 0L) {
     source$parse_errors
   } else {
-    findings_for_language(source$root, source$language, source$path, rules, private_helper_calls)
+    findings_for_language(source$root, source$language, source$path, rules, private_helper_calls, call_scope)
   }
   list(path = source$path, language = source$language, ok = length(source$parse_errors) == 0L, findings = findings)
 }
@@ -659,8 +868,14 @@ main <- function(args = commandArgs(trailingOnly = TRUE)) {
   for (grammar_package in unique(ifelse(languages == "r", "treesitter.r", "treesitter.c"))) require_package(grammar_package)
 
   parsed_sources <- unname(Map(parse_source, paths, languages))
-  private_helper_calls <- r_private_helper_call_counts(parsed_sources)
-  analyses <- lapply(parsed_sources, analyze_parsed_source, rules = config$rules, private_helper_calls = private_helper_calls)
+  call_scope <- r_direct_call_scope(parsed_sources)
+  analyses <- lapply(
+    parsed_sources,
+    analyze_parsed_source,
+    rules = config$rules,
+    private_helper_calls = call_scope$counts,
+    call_scope = call_scope
+  )
   findings <- head(unname(unlist(lapply(analyses, `[[`, "findings"), recursive = FALSE)), max_findings)
   result <- list(
     path = input_path,

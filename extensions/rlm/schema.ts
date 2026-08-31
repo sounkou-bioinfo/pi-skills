@@ -1,5 +1,6 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Static, Type } from "typebox";
+import { THINKING_LEVELS } from "./policy.js";
 
 const opSchema = StringEnum(["start", "status", "wait", "cancel"] as const);
 const backendSchema = StringEnum(["cli", "tmux"] as const);
@@ -8,6 +9,7 @@ const modeSchema = StringEnum(
   { description: "auto keeps one controller; decompose explicitly permits recursive child calls; solve makes one direct model call" },
 );
 const contextKindSchema = StringEnum(["text", "files", "csv", "json", "parquet"] as const);
+const thinkingSchema = (description: string) => StringEnum(THINKING_LEVELS, { description });
 
 export const rlmToolParamsSchema = Type.Object({
   op: Type.Optional(opSchema),
@@ -19,8 +21,10 @@ export const rlmToolParamsSchema = Type.Object({
   backend: Type.Optional(backendSchema),
   mode: Type.Optional(modeSchema),
   async: Type.Optional(Type.Boolean({ description: "Detach and return a run ID so the Pi session stays interactive. Default: true; set false only for a short call that should block." })),
-  model: Type.Optional(Type.String({ description: "Root model. Default: openai-codex/gpt-5.4" })),
-  subModel: Type.Optional(Type.String({ description: "Recursive subcall model. Default: openai-codex/gpt-5.3-codex-spark" })),
+  model: Type.Optional(Type.String({ description: "Root model. Default Luna; use Terra for multi-step planning/synthesis and Sol only for the hardest or high-stakes work." })),
+  subModel: Type.Optional(Type.String({ description: "Recursive subcall model. Default Luna; keep bounded workers cheaper than the root unless their task requires escalation." })),
+  thinking: Type.Optional(thinkingSchema("Explicit root effort override; omitted selects from model tier, role, and bounded context metadata. xhigh/max are never automatic.")),
+  subThinking: Type.Optional(thinkingSchema("Explicit recursive-worker effort override; omitted uses the same bounded automatic policy. xhigh/max are never automatic.")),
   cwd: Type.Optional(Type.String({ description: "Working directory for model subprocesses and relative paths" })),
   maxDepth: Type.Optional(Type.Integer({ minimum: 0, maximum: 3, description: "Recursive depth; default 1 and used only in mode=decompose" })),
   maxNodes: Type.Optional(Type.Integer({ minimum: 1, maximum: 8, description: "Hard node budget; default 4" })),

@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { basename, extname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { completeWithCli } from "./backends.js";
-import { plannerPrompt, solverPrompt, synthesisPrompt } from "./prompts.js";
+import { PLANNER_SYSTEM_PROMPT, SYNTHESIS_SYSTEM_PROMPT, WORKER_SYSTEM_PROMPT, plannerPrompt, solverPrompt, synthesisPrompt } from "./prompts.js";
+import { resolveNodePolicy } from "./policy.js";
 import { evalInRepl, type ReplContext, type ReplFileEntry } from "./repl.js";
 import { startTmuxVisualizer } from "./tmux.js";
 import type { RlmAction, RlmContextKind, RlmNode, RlmObservation, RlmRunResult, RunArtifacts, StartRunInput } from "./types.js";
@@ -529,9 +530,11 @@ export async function runRlmEngine(input: EngineInput, parentSignal?: AbortSigna
       recursionAllowed: input.mode === "decompose",
     });
     const result = await completeWithCli({
-      model: input.model,
-      systemPrompt: prompt,
-      prompt: `Iteration ${iteration}. Return JSON only.`,
+      ...nodePolicy(node, "planner"),
+      systemPrompt: PLANNER_SYSTEM_PROMPT,
+      prompt: `${prompt}
+
+Iteration ${iteration}. Return JSON only.`,
       cwd: input.cwd,
       piBin: input.piBin,
       signal,
@@ -546,8 +549,8 @@ export async function runRlmEngine(input: EngineInput, parentSignal?: AbortSigna
   async function solveNode(node: RlmNode, text: string): Promise<string> {
     const observations = node.observations.map((o) => `[${o.kind}] ${o.text}`).join("\n\n");
     const result = await completeWithCli({
-      model: node.depth === 0 ? input.model : input.subModel,
-      systemPrompt: "You are a recursive language model worker. Use only the provided context subset and observations.",
+      ...nodePolicy(node, "worker"),
+      systemPrompt: WORKER_SYSTEM_PROMPT,
       prompt: solverPrompt({ task: node.task, context: text, observations }),
       cwd: input.cwd,
       piBin: input.piBin,
@@ -557,10 +560,23 @@ export async function runRlmEngine(input: EngineInput, parentSignal?: AbortSigna
     return result.text.trim();
   }
 
+  function nodePolicy(node: RlmNode, role: "planner" | "worker" | "synthesis") {
+    return resolveNodePolicy({
+      depth: node.depth,
+      model: input.model,
+      subModel: input.subModel,
+      thinking: input.thinking,
+      subThinking: input.subThinking,
+      role,
+      contextKind: node.contextKind,
+      contextChars: node.contextChars,
+    });
+  }
+
   async function synthesizeNode(node: RlmNode, childResults: string[]): Promise<string> {
     const result = await completeWithCli({
-      model: input.model,
-      systemPrompt: "You are synthesizing child RLM results into a final answer.",
+      ...nodePolicy(node, "synthesis"),
+      systemPrompt: SYNTHESIS_SYSTEM_PROMPT,
       prompt: synthesisPrompt({ task: node.task, childResults }),
       cwd: input.cwd,
       piBin: input.piBin,

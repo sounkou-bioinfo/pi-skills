@@ -2,6 +2,7 @@ export type RlmBackend = "cli" | "tmux";
 export type RlmOp = "start" | "status" | "wait" | "cancel";
 export type RlmMode = "auto" | "solve" | "decompose";
 export type RlmContextKind = "text" | "files" | "csv" | "json" | "parquet";
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
 
 export interface StartRunInput {
@@ -14,6 +15,8 @@ export interface StartRunInput {
   async: boolean;
   model: string;
   subModel: string;
+  thinking?: ThinkingLevel;
+  subThinking?: ThinkingLevel;
   mode: RlmMode;
   maxDepth: number;
   maxNodes: number;

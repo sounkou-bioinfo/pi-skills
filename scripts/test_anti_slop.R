@@ -87,6 +87,76 @@ writeLines(c(
 valid_r_result <- parse_result(valid_r_path)
 expect_identical(length(valid_r_result$findings), 0L, "A normal scalar admission guard must not be diagnosed")
 
+predicate_r_path <- file.path(work, "predicate-slop.R")
+writeLines(c(
+  "reference_is_one_string <- function(value) {",
+  "  is.character(value) && length(value) == 1L && !is.na(value) && nzchar(value)",
+  "}",
+  "",
+  "reference_is_relative_path <- function(value) {",
+  "  reference_is_one_string(value) &&",
+  "    !grepl(\"(^|/|\\\\\\\\)\\\\.\\\\.($|/|\\\\\\\\)\", value)",
+  "}"
+), predicate_r_path)
+predicate_r_result <- parse_result(predicate_r_path)
+predicate_rules <- vapply(predicate_r_result$findings, `[[`, character(1), "rule")
+expect_identical(
+  sort(predicate_rules),
+  sort(c("r-single-use-predicate-helper", "r-scalar-validator-helper", "r-path-threat-model")),
+  "Translated scalar validators, one-use predicate chains, and false path threat models must be diagnosed"
+)
+
+reused_predicate_path <- file.path(work, "reused-predicate.R")
+writeLines(c(
+  "is_nonempty <- function(value) is.character(value) && nzchar(value)",
+  "first_consumer <- function(value) is_nonempty(value)",
+  "second_consumer <- function(value) is_nonempty(value)"
+), reused_predicate_path)
+reused_predicate_result <- parse_result(reused_predicate_path)
+if ("r-single-use-predicate-helper" %in% vapply(reused_predicate_result$findings, `[[`, character(1), "rule")) {
+  fail("A predicate with two direct call sites must not be diagnosed as a single-use helper chain")
+}
+
+complexity_r_path <- file.path(work, "complexity.R")
+complexity_function <- function(name, decisions) c(
+  sprintf("%s <- function(x) {", name),
+  sprintf("  if (x == %dL) x <- x + 1L", seq_len(decisions)),
+  "  x",
+  "}"
+)
+writeLines(c(
+  complexity_function("complexity_15", 14L),
+  complexity_function("complexity_16", 15L),
+  "cyclocomp_constructs_16 <- function(a, b, c, x) {",
+  "  if (a && b || c) x <- x",
+  "  for (i in x) x <- x",
+  "  for (i in x) x <- x",
+  "  for (i in x) x <- x",
+  "  for (i in x) x <- x",
+  "  while (a) break",
+  "  repeat break",
+  "  a && b",
+  "}",
+  "vectorized_and_ifelse_do_not_count <- function(a, b, c) {",
+  "  ifelse(a & b | c, a, b)",
+  "}",
+  "outer <- function(x) {",
+  paste0("  ", complexity_function("inner", 15L)),
+  "  inner(x)",
+  "}"
+), complexity_r_path)
+complexity_r_result <- parse_result(complexity_r_path)
+complexity_findings <- Filter(function(finding) identical(finding$rule, "r-cyclomatic-complexity"), complexity_r_result$findings)
+expect_identical(length(complexity_findings), 3L, "Complexity 15 must pass; complexity 16 must fail, including cyclocomp control constructs and a nested function scored independently")
+complexity_messages <- vapply(complexity_findings, `[[`, character(1), "message")
+if (!any(grepl("complexity_16 has cyclomatic complexity 16", complexity_messages, fixed = TRUE)) ||
+    !any(grepl("cyclocomp_constructs_16 has cyclomatic complexity 16", complexity_messages, fixed = TRUE)) ||
+    !any(grepl("inner has cyclomatic complexity 16", complexity_messages, fixed = TRUE)) ||
+    any(grepl("vectorized_and_ifelse_do_not_count has cyclomatic complexity", complexity_messages, fixed = TRUE)) ||
+    any(grepl("outer has cyclomatic complexity", complexity_messages, fixed = TRUE))) {
+  fail("Cyclomatic diagnostics must use the >15 boundary and exclude nested bodies from the outer score")
+}
+
 c_path <- file.path(work, "redundant.c")
 writeLines(c(
   "void f(char *x) {",
@@ -119,10 +189,14 @@ if (invalid_config_result$code == 0L || !grepl("Unknown anti-slop rule", invalid
 
 tree_path <- file.path(work, "tree")
 dir.create(file.path(tree_path, "nested"), recursive = TRUE)
-writeLines(".across_files <- function(x) x", file.path(tree_path, "helper.R"))
+writeLines(c(
+  ".across_files <- function(x) x",
+  "is_scalar <- function(x) is.character(x) && nzchar(x)"
+), file.path(tree_path, "helper.R"))
 writeLines(c(
   "f <- function(x) {",
   "  if (!length(x)) return(.across_files(x))",
+  "  if (is_scalar(x)) return(x)",
   "  x",
   "}"
 ), file.path(tree_path, "nested", "consumer.R"))
@@ -134,6 +208,10 @@ expect_identical(length(tree_result$files), 3L, "Directory scans must recurse ov
 tree_private <- Filter(function(finding) identical(finding$rule, "r-private-helper-usage"), tree_result$findings)
 if (length(tree_private) != 1L || !grepl(".across_files has 1 direct call site", tree_private[[1]]$message, fixed = TRUE)) {
   fail("Directory scans must count direct private-helper calls across the analysis scope")
+}
+tree_predicate <- Filter(function(finding) identical(finding$rule, "r-single-use-predicate-helper"), tree_result$findings)
+if (length(tree_predicate) != 1L || !grepl("is_scalar has one direct call, from f", tree_predicate[[1]]$message, fixed = TRUE)) {
+  fail("Directory scans must connect non-dot predicate helpers to callers across the analysis scope")
 }
 
 invalid_path <- file.path(work, "broken.R")

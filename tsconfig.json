@@ -9,5 +9,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["extensions/anti-slop/**/*.ts", "extensions/biomedical-evidence/**/*.ts", "extensions/codex-web-search/**/*.ts", "extensions/context-budget/**/*.ts", "extensions/goals/**/*.ts", "extensions/memory/**/*.ts", "extensions/rlm/**/*.ts", "extensions/vscode-path-links/**/*.ts"]
+  "include": ["extensions/anti-slop/**/*.ts", "extensions/biomedical-evidence/**/*.ts", "extensions/codex-web-search/**/*.ts", "extensions/context-budget/**/*.ts", "extensions/expert-discipline/**/*.ts", "extensions/goals/**/*.ts", "extensions/memory/**/*.ts", "extensions/rlm/**/*.ts", "extensions/vscode-path-links/**/*.ts"]
 }

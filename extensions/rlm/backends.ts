@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import type { ThinkingLevel } from "./types.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -29,6 +30,7 @@ function getPiInvocation(piBin: string, args: string[]): { command: string; args
 
 export async function completeWithCli(input: {
   model: string;
+  thinking: ThinkingLevel;
   prompt: string;
   systemPrompt: string;
   cwd: string;
@@ -54,6 +56,8 @@ export async function completeWithCli(input: {
       "--no-context-files",
       "--model",
       qualifyModel(input.model),
+      "--thinking",
+      input.thinking,
       "--system-prompt",
       systemPromptPath,
       input.prompt,
