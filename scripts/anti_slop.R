@@ -9,6 +9,8 @@ rule_defaults <- c(
   "r-rethrow-handler" = "warning",
   "r-duplicate-adjacent-guard" = "warning",
   "r-else-null" = "warning",
+  "r-redundant-else-after-termination" = "warning",
+  "r-identical-if-branches" = "warning",
   "r-private-helper-usage" = "warning",
   "r-single-use-predicate-helper" = "warning",
   "r-scalar-validator-helper" = "warning",
@@ -31,6 +33,7 @@ usage <- function() {
     "  --config FILE          JSON rule configuration",
     "  --format text|json     Result format (default: text)",
     "  --max-findings N       Maximum findings to emit (default: 100)",
+    "  --jarl COMMAND         Also run the installed Jarl R linter",
     sep = "\n"
   )
 }
@@ -47,7 +50,7 @@ require_package <- function(package) {
 }
 
 parse_args <- function(args) {
-  out <- list(language = "auto", config = NULL, format = "text", max_findings = 100L, path = NULL)
+  out <- list(language = "auto", config = NULL, format = "text", max_findings = 100L, jarl = NULL, path = NULL)
   i <- 1L
   while (i <= length(args)) {
     arg <- args[[i]]
@@ -72,6 +75,10 @@ parse_args <- function(args) {
       out$max_findings <- suppressWarnings(as.integer(take_value(arg)))
     } else if (startsWith(arg, "--max-findings=")) {
       out$max_findings <- suppressWarnings(as.integer(sub("^--max-findings=", "", arg)))
+    } else if (arg == "--jarl") {
+      out$jarl <- take_value(arg)
+    } else if (startsWith(arg, "--jarl=")) {
+      out$jarl <- sub("^--jarl=", "", arg)
     } else if (arg %in% c("-h", "--help")) {
       cat(usage(), "\n")
       quit(status = 0L)
@@ -325,6 +332,7 @@ r_top_level_function_definitions <- function(root) {
 
 r_private_helper_definitions <- function(root) {
   definitions <- r_top_level_function_definitions(root)
+  if (length(definitions) == 0L) return(definitions)
   definitions[startsWith(names(definitions), ".")]
 }
 
@@ -495,6 +503,41 @@ find_r_else_null <- function(root, path, severity) {
   findings
 }
 
+find_r_redundant_else_after_termination <- function(root, path, severity) {
+  findings <- list()
+  walk_tree(root, function(node) {
+    if (!identical(node_type(node), "if_statement") || !identical(node_type(node_parent(node)), "braced_expression")) return()
+    consequence <- node_field(node, "consequence")
+    alternative <- node_field(node, "alternative")
+    if (is.null(alternative) || is.null(consequence) || !r_terminates(consequence)) return()
+    findings[[length(findings) + 1L]] <<- new_finding(
+      "r-redundant-else-after-termination", severity,
+      "A standalone if branch already stops or returns; remove the redundant else and outdent its alternative.",
+      path, alternative
+    )
+  })
+  findings
+}
+
+find_r_identical_if_branches <- function(root, path, severity) {
+  findings <- list()
+  walk_tree(root, function(node) {
+    if (!identical(node_type(node), "if_statement")) return()
+    condition <- node_field(node, "condition")
+    consequence <- node_field(node, "consequence")
+    alternative <- node_field(node, "alternative")
+    if (any(vapply(list(condition, consequence, alternative), is.null, logical(1)))) return()
+    if (!r_pure_guard(condition)) return()
+    if (!identical(normalized_node_text(consequence), normalized_node_text(alternative))) return()
+    findings[[length(findings) + 1L]] <<- new_finding(
+      "r-identical-if-branches", severity,
+      "A side-effect-free condition selects identical branches; remove the conditional after confirming that forcing the condition is not part of the contract.",
+      path, node
+    )
+  })
+  findings
+}
+
 find_r_private_helper_usage <- function(root, path, severity, call_counts = NULL) {
   definitions <- r_private_helper_definitions(root)
   if (length(definitions) == 0L) return(list())
@@ -609,12 +652,12 @@ find_r_cyclomatic_complexity <- function(root, path, severity) {
   walk_tree(root, function(node) {
     if (!identical(node_type(node), "function_definition")) return()
     complexity <- r_cyclomatic_complexity(node)
-    if (complexity <= 15L) return()
+    if (complexity < 15L) return()
     name <- r_assigned_function_name(node)
     findings[[length(findings) + 1L]] <<- new_finding(
       "r-cyclomatic-complexity", severity,
       sprintf(
-        "R function %s has cyclomatic complexity %d, exceeding 15. Reduce control-flow paths or justify the irreducible decision structure.",
+        "R function %s has cyclomatic complexity %d; the policy requires less than 15. Reduce control-flow paths or justify the irreducible decision structure.",
         if (nzchar(name)) name else "<anonymous>", complexity
       ),
       path, node
@@ -770,6 +813,8 @@ findings_for_language <- function(root, language, path, rules, private_helper_ca
       "r-rethrow-handler" = find_r_rethrow_handler,
       "r-duplicate-adjacent-guard" = find_r_duplicate_adjacent_guard,
       "r-else-null" = find_r_else_null,
+      "r-redundant-else-after-termination" = find_r_redundant_else_after_termination,
+      "r-identical-if-branches" = find_r_identical_if_branches,
       "r-private-helper-usage" = find_r_private_helper_usage,
       "r-single-use-predicate-helper" = find_r_single_use_predicate_helper,
       "r-scalar-validator-helper" = find_r_scalar_validator_helper,
@@ -799,6 +844,98 @@ findings_for_language <- function(root, language, path, rules, private_helper_ca
     })
   }
   findings
+}
+
+jarl_assert <- function(condition, message) {
+  if (!isTRUE(condition)) fail(message)
+  invisible(TRUE)
+}
+
+jarl_finding <- function(diagnostic) {
+  malformed <- "Jarl returned a malformed diagnostic"
+  malformed_location <- "Jarl returned a malformed diagnostic location"
+  jarl_assert(is.list(diagnostic), malformed)
+  jarl_assert(all(vapply(c("message", "location"), function(name) is.list(diagnostic[[name]]), logical(1))), malformed)
+  fields <- list(
+    name = diagnostic$message$name,
+    body = diagnostic$message$body,
+    filename = diagnostic$filename,
+    row = diagnostic$location$row,
+    column = diagnostic$location$column
+  )
+  string_fields <- fields[c("name", "body", "filename")]
+  valid_strings <- vapply(string_fields, function(value) all(c(is.character(value), length(value) == 1L)), logical(1))
+  jarl_assert(all(valid_strings), malformed)
+  coordinates <- unlist(fields[c("row", "column")], use.names = FALSE)
+  jarl_assert(is.numeric(coordinates), malformed_location)
+  jarl_assert(length(coordinates) == 2L, malformed_location)
+  jarl_assert(all(is.finite(coordinates)), malformed_location)
+  jarl_assert(all(coordinates == floor(coordinates)), malformed_location)
+  jarl_assert(coordinates[[1]] >= 1, malformed_location)
+  jarl_assert(coordinates[[2]] >= 0, malformed_location)
+  jarl_assert(coordinates[[1]] <= .Machine$integer.max, malformed_location)
+  jarl_assert(coordinates[[2]] < .Machine$integer.max, malformed_location)
+  path <- normalizePath(fields$filename, winslash = "/", mustWork = TRUE)
+  line <- as.integer(coordinates[[1]])
+  column <- as.integer(coordinates[[2]]) + 1L
+  source_lines <- readLines(path, warn = FALSE, encoding = "UTF-8")
+  suggestion <- diagnostic$message$suggestion
+  message <- fields$body
+  has_suggestion <- is.character(suggestion)
+  if (has_suggestion) has_suggestion <- length(suggestion) == 1L
+  if (has_suggestion) has_suggestion <- nzchar(suggestion)
+  if (has_suggestion) message <- paste0(message, " Suggestion: ", suggestion)
+  excerpt <- ""
+  if (line <= length(source_lines)) excerpt <- trimws(source_lines[[line]])
+  list(
+    rule = paste0("jarl/", fields$name),
+    severity = "warning",
+    message = message,
+    path = path,
+    excerpt = excerpt,
+    line = line,
+    column = column,
+    end_line = line,
+    end_column = column
+  )
+}
+
+find_jarl_findings <- function(command, paths) {
+  executable <- unname(Sys.which(command))
+  if (!nzchar(executable)) fail(paste0("Requested Jarl executable was not found: ", command))
+  if (length(paths) == 0L) return(list())
+  require_package("jsonlite")
+  stdout_path <- tempfile("anti-slop-jarl-stdout-")
+  stderr_path <- tempfile("anti-slop-jarl-stderr-")
+  on.exit(unlink(c(stdout_path, stderr_path), force = TRUE), add = TRUE)
+  status <- tryCatch(
+    suppressWarnings(system2(
+      executable,
+      c("check", "--output-format", "json", shQuote(paths)),
+      stdout = stdout_path,
+      stderr = stderr_path
+    )),
+    error = function(error) fail(paste0("Jarl execution failed: ", conditionMessage(error)))
+  )
+  stdout <- paste(readLines(stdout_path, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
+  stderr <- paste(readLines(stderr_path, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
+  payload <- tryCatch(
+    jsonlite::fromJSON(stdout, simplifyVector = FALSE),
+    error = function(error) fail(paste0("Jarl returned malformed JSON: ", conditionMessage(error), if (nzchar(stderr)) paste0("\n", stderr) else ""))
+  )
+  if (!is.list(payload) || !is.list(payload$diagnostics) || !is.list(payload$errors)) {
+    fail("Jarl returned malformed JSON: expected diagnostics and errors arrays")
+  }
+  if (length(payload$errors) > 0L) {
+    errors <- vapply(payload$errors, function(error) {
+      if (is.list(error) && is.character(error$error) && length(error$error) == 1L) error$error else "Unknown Jarl error"
+    }, character(1))
+    fail(paste(c("Jarl analysis failed:", errors), collapse = "\n"))
+  }
+  if (!status %in% c(0L, 1L)) {
+    fail(paste0("Jarl exited with status ", status, if (nzchar(stderr)) paste0(": ", stderr) else ""))
+  }
+  lapply(payload$diagnostics, jarl_finding)
 }
 
 format_text <- function(result) {
@@ -876,6 +1013,17 @@ main <- function(args = commandArgs(trailingOnly = TRUE)) {
     private_helper_calls = call_scope$counts,
     call_scope = call_scope
   )
+  if (!is.null(options$jarl)) {
+    parsed_ok <- vapply(parsed_sources, function(source) length(source$parse_errors) == 0L, logical(1))
+    jarl_paths <- paths[languages == "r" & parsed_ok]
+    jarl_findings <- find_jarl_findings(options$jarl, jarl_paths)
+    analysis_paths <- vapply(analyses, `[[`, character(1), "path")
+    for (finding in jarl_findings) {
+      index <- match(finding$path, analysis_paths)
+      if (is.na(index)) fail(paste0("Jarl returned a diagnostic outside the analysis scope: ", finding$path))
+      analyses[[index]]$findings <- c(analyses[[index]]$findings, list(finding))
+    }
+  }
   findings <- head(unname(unlist(lapply(analyses, `[[`, "findings"), recursive = FALSE)), max_findings)
   result <- list(
     path = input_path,

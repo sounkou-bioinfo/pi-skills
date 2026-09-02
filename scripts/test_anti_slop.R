@@ -86,6 +86,42 @@ writeLines(c(
 ), valid_r_path)
 valid_r_result <- parse_result(valid_r_path)
 expect_identical(length(valid_r_result$findings), 0L, "A normal scalar admission guard must not be diagnosed")
+no_function_r_path <- file.path(work, "no-function.R")
+writeLines("value <- 1L", no_function_r_path)
+no_function_r_result <- parse_result(no_function_r_path)
+expect_identical(length(no_function_r_result$findings), 0L, "A valid R file without function definitions must analyze cleanly")
+
+branch_r_path <- file.path(work, "branch-slop.R")
+writeLines(c(
+  "redundant_else <- function(x) {",
+  "  if (is.null(x)) stop(\"missing\") else x",
+  "  if (is.character(x)) return(x) else as.character(x)",
+  "  x",
+  "}",
+  "identical_branches <- function(x) if (is.character(x)) x else x",
+  "effectful_condition <- function(x) if (trace(x)) x else x",
+  "different_branches <- function(x) if (is.null(x)) 0L else x",
+  "not_standalone <- function(x) identity(if (is.null(x)) stop(\"missing\") else x)",
+  "non_terminating <- function(x) {",
+  "  if (is.null(x)) warning(\"missing\") else x",
+  "  x",
+  "}",
+  "multi_statement_branch <- function(x) {",
+  "  if (is.null(x)) { warning(\"missing\"); return(x) } else x",
+  "  x",
+  "}"
+), branch_r_path)
+branch_r_result <- parse_result(branch_r_path)
+branch_rules <- vapply(branch_r_result$findings, `[[`, character(1), "rule")
+expect_identical(
+  sort(branch_rules),
+  sort(c("r-redundant-else-after-termination", "r-redundant-else-after-termination", "r-identical-if-branches")),
+  "Redundant terminating else branches and identical pure branches must be diagnosed conservatively"
+)
+branch_config_path <- file.path(work, "branch-rules.json")
+writeLines('{"rules":{"r-redundant-else-after-termination":"off","r-identical-if-branches":"off"}}', branch_config_path)
+configured_branch_result <- parse_result("--config", branch_config_path, branch_r_path)
+expect_identical(length(configured_branch_result$findings), 0L, "Configuration must disable the new branch rules")
 
 predicate_r_path <- file.path(work, "predicate-slop.R")
 writeLines(c(
@@ -125,8 +161,8 @@ complexity_function <- function(name, decisions) c(
   "}"
 )
 writeLines(c(
+  complexity_function("complexity_14", 13L),
   complexity_function("complexity_15", 14L),
-  complexity_function("complexity_16", 15L),
   "cyclocomp_constructs_16 <- function(a, b, c, x) {",
   "  if (a && b || c) x <- x",
   "  for (i in x) x <- x",
@@ -147,14 +183,14 @@ writeLines(c(
 ), complexity_r_path)
 complexity_r_result <- parse_result(complexity_r_path)
 complexity_findings <- Filter(function(finding) identical(finding$rule, "r-cyclomatic-complexity"), complexity_r_result$findings)
-expect_identical(length(complexity_findings), 3L, "Complexity 15 must pass; complexity 16 must fail, including cyclocomp control constructs and a nested function scored independently")
+expect_identical(length(complexity_findings), 3L, "Complexity 14 must pass; complexity 15 must fail, including cyclocomp control constructs and a nested function scored independently")
 complexity_messages <- vapply(complexity_findings, `[[`, character(1), "message")
-if (!any(grepl("complexity_16 has cyclomatic complexity 16", complexity_messages, fixed = TRUE)) ||
+if (!any(grepl("complexity_15 has cyclomatic complexity 15", complexity_messages, fixed = TRUE)) ||
     !any(grepl("cyclocomp_constructs_16 has cyclomatic complexity 16", complexity_messages, fixed = TRUE)) ||
     !any(grepl("inner has cyclomatic complexity 16", complexity_messages, fixed = TRUE)) ||
     any(grepl("vectorized_and_ifelse_do_not_count has cyclomatic complexity", complexity_messages, fixed = TRUE)) ||
     any(grepl("outer has cyclomatic complexity", complexity_messages, fixed = TRUE))) {
-  fail("Cyclomatic diagnostics must use the >15 boundary and exclude nested bodies from the outer score")
+  fail("Cyclomatic diagnostics must enforce complexity below 15 and exclude nested bodies from the outer score")
 }
 
 c_path <- file.path(work, "redundant.c")
@@ -185,6 +221,47 @@ writeLines('{"rules":{"not-a-rule":"off"}}', invalid_config_path)
 invalid_config_result <- run_analyzer("--config", invalid_config_path, c_path)
 if (invalid_config_result$code == 0L || !grepl("Unknown anti-slop rule", invalid_config_result$output, fixed = TRUE)) {
   fail("Unknown configured rules must fail explicitly")
+}
+
+missing_jarl_command <- file.path(work, "missing-jarl")
+missing_jarl_result <- run_analyzer("--jarl", missing_jarl_command, valid_r_path)
+missing_jarl_c_result <- run_analyzer("--jarl", missing_jarl_command, c_path)
+missing_jarl_checks <- c(
+  missing_jarl_result$code != 0L,
+  missing_jarl_c_result$code != 0L,
+  grepl("Requested Jarl executable was not found", missing_jarl_result$output, fixed = TRUE),
+  grepl("Requested Jarl executable was not found", missing_jarl_c_result$output, fixed = TRUE)
+)
+if (!all(missing_jarl_checks)) {
+  fail("An explicitly requested missing Jarl executable must fail clearly, even when the scope has no R files")
+}
+if (.Platform$OS.type != "windows") {
+  fake_jarl_path <- file.path(work, "fake-jarl")
+  jarl_payload <- jsonlite::toJSON(list(
+    diagnostics = list(list(
+      message = list(name = "unreachable_code", body = "This code is unreachable.", suggestion = NULL),
+      filename = normalizePath(valid_r_path, winslash = "/", mustWork = TRUE),
+      range = list(0L, 1L),
+      location = list(row = 2L, column = 2L),
+      fix = list(content = "", start = 0L, end = 0L, to_skip = TRUE)
+    )),
+    errors = list()
+  ), auto_unbox = TRUE, null = "null")
+  writeLines(c("#!/bin/sh", "cat <<'JARL_JSON'", jarl_payload, "JARL_JSON", "exit 1"), fake_jarl_path)
+  Sys.chmod(fake_jarl_path, mode = "0755")
+  jarl_result <- parse_result("--jarl", fake_jarl_path, valid_r_path)
+  jarl_findings <- Filter(function(finding) startsWith(finding$rule, "jarl/"), jarl_result$findings)
+  if (length(jarl_findings) != 1L || !identical(jarl_findings[[1]]$rule, "jarl/unreachable_code") ||
+      !identical(jarl_findings[[1]]$line, 2L) || !identical(jarl_findings[[1]]$column, 3L)) {
+    fail("Requested Jarl diagnostics must be validated, namespaced, and normalized to one-based locations")
+  }
+
+  invalid_jarl_payload <- sub('"row":2', '"row":2.5', jarl_payload, fixed = TRUE)
+  writeLines(c("#!/bin/sh", "cat <<'JARL_JSON'", invalid_jarl_payload, "JARL_JSON", "exit 1"), fake_jarl_path)
+  invalid_jarl_result <- run_analyzer("--jarl", fake_jarl_path, valid_r_path)
+  if (invalid_jarl_result$code == 0L || !grepl("malformed diagnostic location", invalid_jarl_result$output, fixed = TRUE)) {
+    fail("Jarl diagnostics with fractional locations must fail explicitly")
+  }
 }
 
 tree_path <- file.path(work, "tree")
