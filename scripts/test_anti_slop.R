@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 
 file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
-test_path <- if (length(file_arg)) sub("^--file=", "", file_arg[[1]]) else "scripts/test_anti_slop.R"
+test_path <- if (length(file_arg) > 0L) sub("^--file=", "", file_arg[[1]]) else "scripts/test_anti_slop.R"
 script <- normalizePath(file.path(dirname(test_path), "anti_slop.R"), winslash = "/", mustWork = TRUE)
 
 `%||%` <- function(left, right) if (is.null(left)) right else left
@@ -49,6 +49,8 @@ expect_identical(
 
 limited_r_result <- parse_result("--max-findings", "1", r_path)
 expect_identical(length(limited_r_result$findings), 1L, "--max-findings must bound emitted diagnostics")
+inline_limited_r_result <- parse_result("--language=r", "--max-findings=1", r_path)
+expect_identical(length(inline_limited_r_result$findings), 1L, "Inline option values must match separate option values")
 
 private_r_path <- file.path(work, "private-and-conditional.R")
 writeLines(c(
@@ -185,11 +187,14 @@ complexity_r_result <- parse_result(complexity_r_path)
 complexity_findings <- Filter(function(finding) identical(finding$rule, "r-cyclomatic-complexity"), complexity_r_result$findings)
 expect_identical(length(complexity_findings), 3L, "Complexity 14 must pass; complexity 15 must fail, including cyclocomp control constructs and a nested function scored independently")
 complexity_messages <- vapply(complexity_findings, `[[`, character(1), "message")
-if (!any(grepl("complexity_15 has cyclomatic complexity 15", complexity_messages, fixed = TRUE)) ||
-    !any(grepl("cyclocomp_constructs_16 has cyclomatic complexity 16", complexity_messages, fixed = TRUE)) ||
-    !any(grepl("inner has cyclomatic complexity 16", complexity_messages, fixed = TRUE)) ||
-    any(grepl("vectorized_and_ifelse_do_not_count has cyclomatic complexity", complexity_messages, fixed = TRUE)) ||
-    any(grepl("outer has cyclomatic complexity", complexity_messages, fixed = TRUE))) {
+complexity_checks <- c(
+  any(grepl("complexity_15 has cyclomatic complexity 15", complexity_messages, fixed = TRUE)),
+  any(grepl("cyclocomp_constructs_16 has cyclomatic complexity 16", complexity_messages, fixed = TRUE)),
+  any(grepl("inner has cyclomatic complexity 16", complexity_messages, fixed = TRUE)),
+  !any(grepl("vectorized_and_ifelse_do_not_count has cyclomatic complexity", complexity_messages, fixed = TRUE)),
+  !any(grepl("outer has cyclomatic complexity", complexity_messages, fixed = TRUE))
+)
+if (!all(complexity_checks)) {
   fail("Cyclomatic diagnostics must enforce complexity below 15 and exclude nested bodies from the outer score")
 }
 
@@ -216,6 +221,14 @@ configured_c_result <- parse_result("--config", config_path, c_path)
 if ("c-runtime-assert" %in% vapply(configured_c_result$findings, `[[`, character(1), "rule")) {
   fail("Rule configuration must disable c-runtime-assert")
 }
+empty_config_path <- file.path(work, "empty-rules.json")
+writeLines("{}", empty_config_path)
+empty_config_result <- parse_result("--config", empty_config_path, c_path)
+expect_identical(
+  sort(vapply(empty_config_result$findings, `[[`, character(1), "rule")),
+  sort(vapply(c_result$findings, `[[`, character(1), "rule")),
+  "An empty configuration object must preserve default rules"
+)
 invalid_config_path <- file.path(work, "invalid-rules.json")
 writeLines('{"rules":{"not-a-rule":"off"}}', invalid_config_path)
 invalid_config_result <- run_analyzer("--config", invalid_config_path, c_path)
@@ -251,8 +264,15 @@ if (.Platform$OS.type != "windows") {
   Sys.chmod(fake_jarl_path, mode = "0755")
   jarl_result <- parse_result("--jarl", fake_jarl_path, valid_r_path)
   jarl_findings <- Filter(function(finding) startsWith(finding$rule, "jarl/"), jarl_result$findings)
-  if (length(jarl_findings) != 1L || !identical(jarl_findings[[1]]$rule, "jarl/unreachable_code") ||
-      !identical(jarl_findings[[1]]$line, 2L) || !identical(jarl_findings[[1]]$column, 3L)) {
+  if (length(jarl_findings) != 1L) {
+    fail("Requested Jarl diagnostics must be validated, namespaced, and normalized to one-based locations")
+  }
+  jarl_checks <- c(
+    identical(jarl_findings[[1]]$rule, "jarl/unreachable_code"),
+    identical(jarl_findings[[1]]$line, 2L),
+    identical(jarl_findings[[1]]$column, 3L)
+  )
+  if (!all(jarl_checks)) {
     fail("Requested Jarl diagnostics must be validated, namespaced, and normalized to one-based locations")
   }
 

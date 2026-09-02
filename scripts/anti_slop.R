@@ -49,36 +49,44 @@ require_package <- function(package) {
   }
 }
 
+take_cli_value <- function(args, index, option, inline_value) {
+  if (!is.null(inline_value)) return(list(value = inline_value, index = index))
+  index <- index + 1L
+  if (index > length(args)) fail(paste0(option, " requires a value"))
+  if (startsWith(args[[index]], "--")) fail(paste0(option, " requires a value"))
+  list(value = args[[index]], index = index)
+}
+
+validate_cli_options <- function(options) {
+  if (is.null(options$path)) fail("Provide one source FILE")
+  if (!options$language %in% c("auto", "r", "c")) fail("--language must be auto, r, or c")
+  if (!options$format %in% c("text", "json")) fail("--format must be text or json")
+  if (is.na(options$max_findings)) fail("--max-findings must be a positive integer")
+  if (options$max_findings < 1L) fail("--max-findings must be a positive integer")
+  options
+}
+
 parse_args <- function(args) {
   out <- list(language = "auto", config = NULL, format = "text", max_findings = 100L, jarl = NULL, path = NULL)
+  option_fields <- c(
+    "--language" = "language",
+    "--config" = "config",
+    "--format" = "format",
+    "--max-findings" = "max_findings",
+    "--jarl" = "jarl"
+  )
   i <- 1L
   while (i <= length(args)) {
     arg <- args[[i]]
-    take_value <- function(option) {
-      i <<- i + 1L
-      if (i > length(args) || startsWith(args[[i]], "--")) fail(paste0(option, " requires a value"))
-      args[[i]]
-    }
-    if (arg == "--language") {
-      out$language <- take_value(arg)
-    } else if (startsWith(arg, "--language=")) {
-      out$language <- sub("^--language=", "", arg)
-    } else if (arg == "--config") {
-      out$config <- take_value(arg)
-    } else if (startsWith(arg, "--config=")) {
-      out$config <- sub("^--config=", "", arg)
-    } else if (arg == "--format") {
-      out$format <- take_value(arg)
-    } else if (startsWith(arg, "--format=")) {
-      out$format <- sub("^--format=", "", arg)
-    } else if (arg == "--max-findings") {
-      out$max_findings <- suppressWarnings(as.integer(take_value(arg)))
-    } else if (startsWith(arg, "--max-findings=")) {
-      out$max_findings <- suppressWarnings(as.integer(sub("^--max-findings=", "", arg)))
-    } else if (arg == "--jarl") {
-      out$jarl <- take_value(arg)
-    } else if (startsWith(arg, "--jarl=")) {
-      out$jarl <- sub("^--jarl=", "", arg)
+    has_inline_value <- startsWith(arg, "--") && grepl("=", arg, fixed = TRUE)
+    option <- if (has_inline_value) sub("=.*$", "", arg) else arg
+    inline_value <- if (has_inline_value) sub("^[^=]*=", "", arg) else NULL
+    if (option %in% names(option_fields)) {
+      parsed <- take_cli_value(args, i, option, inline_value)
+      value <- parsed$value
+      if (option == "--max-findings") value <- suppressWarnings(as.integer(value))
+      out[[option_fields[[option]]]] <- value
+      i <- parsed$index
     } else if (arg %in% c("-h", "--help")) {
       cat(usage(), "\n")
       quit(status = 0L)
@@ -91,11 +99,7 @@ parse_args <- function(args) {
     }
     i <- i + 1L
   }
-  if (is.null(out$path)) fail("Provide one source FILE")
-  if (!out$language %in% c("auto", "r", "c")) fail("--language must be auto, r, or c")
-  if (!out$format %in% c("text", "json")) fail("--format must be text or json")
-  if (is.na(out$max_findings) || out$max_findings < 1L) fail("--max-findings must be a positive integer")
-  out
+  validate_cli_options(out)
 }
 
 infer_language <- function(path) {
@@ -140,10 +144,37 @@ source_paths <- function(path, language) {
   paths
 }
 
+merge_rule_config <- function(rules, configured_rules) {
+  if (is.null(configured_rules)) return(rules)
+  if (!is.list(configured_rules)) {
+    fail("Configuration field 'rules' must be an object mapping rule names to warning, error, or off")
+  }
+  if (is.null(names(configured_rules))) {
+    fail("Configuration field 'rules' must be an object mapping rule names to warning, error, or off")
+  }
+  unknown <- setdiff(names(configured_rules), names(rules))
+  if (length(unknown) > 0L) fail(paste0("Unknown anti-slop rule(s): ", paste(unknown, collapse = ", ")))
+  for (name in names(configured_rules)) {
+    severity <- configured_rules[[name]]
+    if (!is.character(severity)) fail(paste0("Rule '", name, "' must be warning, error, or off"))
+    if (length(severity) != 1L) fail(paste0("Rule '", name, "' must be warning, error, or off"))
+    if (!severity %in% c("warning", "error", "off")) fail(paste0("Rule '", name, "' must be warning, error, or off"))
+    rules[[name]] <- severity
+  }
+  rules
+}
+
+configured_max_findings <- function(value) {
+  if (is.null(value)) return(NULL)
+  value <- suppressWarnings(as.integer(value))
+  if (length(value) != 1L) fail("Configuration 'max_findings' must be a positive integer")
+  if (is.na(value)) fail("Configuration 'max_findings' must be a positive integer")
+  if (value < 1L) fail("Configuration 'max_findings' must be a positive integer")
+  value
+}
+
 read_rule_config <- function(path) {
-  rules <- rule_defaults
-  max_findings <- NULL
-  if (is.null(path)) return(list(rules = rules, max_findings = max_findings))
+  if (is.null(path)) return(list(rules = rule_defaults, max_findings = NULL))
   require_package("jsonlite")
   if (!file.exists(path)) fail(paste0("Rule configuration does not exist: ", path))
   config <- tryCatch(
@@ -151,25 +182,10 @@ read_rule_config <- function(path) {
     error = function(error) fail(paste0("Invalid anti-slop JSON configuration: ", conditionMessage(error)))
   )
   if (!is.list(config)) fail("Anti-slop JSON configuration must be an object")
-  if (!is.null(config$rules)) {
-    if (!is.list(config$rules) || is.null(names(config$rules))) {
-      fail("Configuration field 'rules' must be an object mapping rule names to warning, error, or off")
-    }
-    unknown <- setdiff(names(config$rules), names(rule_defaults))
-    if (length(unknown) > 0L) fail(paste0("Unknown anti-slop rule(s): ", paste(unknown, collapse = ", ")))
-    for (name in names(config$rules)) {
-      severity <- config$rules[[name]]
-      if (!is.character(severity) || length(severity) != 1L || !severity %in% c("warning", "error", "off")) {
-        fail(paste0("Rule '", name, "' must be warning, error, or off"))
-      }
-      rules[[name]] <- severity
-    }
-  }
-  if (!is.null(config$max_findings)) {
-    max_findings <- suppressWarnings(as.integer(config$max_findings))
-    if (is.na(max_findings) || max_findings < 1L) fail("Configuration 'max_findings' must be a positive integer")
-  }
-  list(rules = rules, max_findings = max_findings)
+  list(
+    rules = merge_rule_config(rule_defaults, config$rules),
+    max_findings = configured_max_findings(config$max_findings)
+  )
 }
 
 node_type <- treesitter::node_type
@@ -241,9 +257,10 @@ r_handler_rethrows <- function(handler) {
   if (length(params) != 1L) return(FALSE)
   caught <- node_field(params[[1]], "name")
   body <- r_function_body(handler)
-  if (is.null(caught) || is.null(body) || !identical(node_type(body), "call") || !identical(function_name(body), "stop")) {
-    return(FALSE)
-  }
+  if (is.null(caught)) return(FALSE)
+  if (is.null(body)) return(FALSE)
+  if (!identical(node_type(body), "call")) return(FALSE)
+  if (!identical(function_name(body), "stop")) return(FALSE)
   arguments <- call_argument_nodes(body)
   length(arguments) == 1L && identical(node_name(node_field(arguments[[1]], "value")), node_name(caught))
 }
@@ -321,10 +338,14 @@ r_condition_sites <- function(root) {
 r_top_level_function_definitions <- function(root) {
   definitions <- list()
   for (statement in node_named_children(root)) {
-    if (!identical(node_type(statement), "binary_operator") || !node_name(node_field(statement, "operator")) %in% c("<-", "=")) next
+    if (!identical(node_type(statement), "binary_operator")) next
+    if (!node_name(node_field(statement, "operator")) %in% c("<-", "=")) next
     name <- node_field(statement, "lhs")
     definition <- node_field(statement, "rhs")
-    if (is.null(name) || is.null(definition) || !identical(node_type(name), "identifier") || !identical(node_type(definition), "function_definition")) next
+    if (is.null(name)) next
+    if (is.null(definition)) next
+    if (!identical(node_type(name), "identifier")) next
+    if (!identical(node_type(definition), "function_definition")) next
     definitions[[node_name(name)]] <- statement
   }
   definitions
@@ -341,7 +362,8 @@ r_function_expression <- function(definition) {
   if (is.null(body)) return(NULL)
   if (!identical(node_type(body), "braced_expression")) return(body)
   statements <- node_named_children(body)
-  if (length(statements) == 1L) statements[[1]] else NULL
+  if (length(statements) == 1L) return(statements[[1]])
+  NULL
 }
 
 r_predicate_expression <- function(node, helper_names, require_predicate = FALSE) {
@@ -712,7 +734,10 @@ find_c_final_void_return <- function(root, path, severity) {
     if (!identical(node_type(node), "function_definition")) return()
     type <- node_field(node, "type")
     body <- node_field(node, "body")
-    if (is.null(type) || node_name(type) != "void" || is.null(body) || !identical(node_type(body), "compound_statement")) return()
+    if (is.null(type)) return()
+    if (node_name(type) != "void") return()
+    if (is.null(body)) return()
+    if (!identical(node_type(body), "compound_statement")) return()
     statements <- node_named_children(body)
     if (length(statements) == 0L) return()
     final <- statements[[length(statements)]]
