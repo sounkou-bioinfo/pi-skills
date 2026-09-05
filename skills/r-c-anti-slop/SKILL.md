@@ -11,7 +11,7 @@ Use `scripts/anti_slop.R` directly or the `anti_slop` Pi tool. Tree-sitter is th
 
 File and directory scans are supported. Git directory scans use tracked R/C sources; other directories recurse over recognized suffixes. Direct-call counts used by helper rules are scope-wide review evidence; dynamic callback/get calls are intentionally not inferred.
 
-Jarl is an optional complementary R linter, not a parser fallback or bundled dependency. Set `jarl = true` on the Pi tool, use `/anti-slop --jarl path`, or pass `--jarl jarl` to the script. An explicit Jarl request fails if the executable or its JSON diagnostics are unavailable; findings are namespaced as `jarl/<rule>`. Let Jarl own broad lint rules and keep native anti-slop rules limited to structural review prompts it does not provide.
+Jarl is an optional complementary R linter, not a parser fallback or bundled dependency. Set `jarl = true` on the Pi tool, use `/anti-slop --jarl path`, or pass `--jarl jarl` to the script. An explicit Jarl request fails if the executable or its JSON diagnostics are unavailable; findings are namespaced as `jarl/<rule>`. Results disclose the Jarl execution state, disabled native rules, total findings, and truncation state. Let Jarl own broad lint rules and keep native anti-slop rules limited to structural review prompts it does not provide.
 
 ## Rules
 
@@ -27,7 +27,7 @@ R rules, by exact trigger:
 - `r-single-use-predicate-helper`: a top-level, side-effect-free predicate helper with exactly one direct call from another assigned function in the analysis scope, regardless of whether its name starts with a dot.
 - `r-scalar-validator-helper`: a dedicated helper that hand-rolls scalar-string validation by composing `is.character()`, `length()`, `is.na()`, and `nzchar()` instead of placing a concise check at a real admission boundary.
 - `r-path-threat-model`: a helper that rejects parent path segments with a `grepl()` string pattern; require distinct producer/consumer principals and privileges rather than importing traversal-security posture into same-principal local R configuration.
-- `r-conditional-sprawl`: an `if`, `while`, or `ifelse()`/`if_else()` test with more than three atomic `&&`, `||`, `&`, or `|` clauses — it reports the count and asks for the one decision or admission invariant being expressed.
+- `r-conditional-sprawl`: any maximal boolean expression with more than three atomic `&&`, `||`, `&`, or `|` clauses, including equivalent direct clauses supplied through `all(...)`, `any(...)`, `all(c(...))`, or `any(c(...))`, whether used as a condition, assigned to a local alias, passed as an argument, or returned. Renaming or mechanically re-encoding the unchanged expression does not reduce its decision structure and must not evade the rule.
 - `r-implicit-length-test`: `length(x)` or `!length(x)` used as a condition, relying on numeric-to-logical coercion (`0L` is false, positive lengths are true); use `length(x) == 0L` or `length(x) > 0L` to state the intended cardinality.
 - `r-cyclomatic-complexity`: a function whose cyclomatic complexity is 15 or greater, enforcing a score below 15 with `cyclocomp`-compatible contributions for `if`, `for`, `while`, `repeat`, `&&`, and `||`; nested function bodies are scored independently, while `&`, `|`, and `ifelse()` do not add paths.
 
@@ -55,4 +55,4 @@ Replace host-unsafe assertions with explicit error propagation, not silent omiss
 
 ## Proof
 
-Run the native analyzer before and after; add Jarl when it is installed and pinned for the target repository. Inspect each changed AST site, run focused behavioral/error/lifetime tests, then repository gates and `git diff --check`. A clean analyzer or Jarl result does not prove program correctness.
+Run the native analyzer before and after; add Jarl when it is installed and pinned for the target repository. Scan the actual tracked working tree or requested source directly: a reformatted/copied temporary tree, selected source-only subset, disabled-rule profile, truncated output, or claimed Jarl run without matching result provenance is not proof of repository cleanliness. Inspect each changed AST site, run focused behavioral/error/lifetime tests, then repository gates and `git diff --check`. A clean analyzer or Jarl result does not prove program correctness.

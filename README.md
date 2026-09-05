@@ -73,18 +73,23 @@ recurses over recognized source suffixes. It counts direct calls to each
 top-level R private helper across that analysis scope and asks for its
 distinct invariant/effect, flags cyclomatic complexity of 15 or greater,
 redundant terminating `else` branches, identical pure-condition
-branches, condition sprawl, and ambiguous `length()` truthiness, and
-inspects narrow redundant/host-unsafe C patterns. The extension
-deliberately does not use regex or a substitute parser: unavailable R
-grammar packages and parse errors are explicit results. Runtime
-requirements are `treesitter`, `treesitter.r` for R, and
+branches, boolean-expression sprawl including one-use aliases, and
+ambiguous `length()` truthiness, and inspects narrow
+redundant/host-unsafe C patterns. The extension deliberately does not
+use regex or a substitute parser: unavailable R grammar packages and
+parse errors are explicit results. Runtime requirements are
+`treesitter`, `treesitter.r` for R, and
 [treesitter.c](https://github.com/sounkou-bioinfo/treesitter.c) for C;
 optional JSON configuration and machine-readable output use `jsonlite`.
 An installed [Jarl](https://github.com/etiennebacher/jarl) linter can be
 requested with the tool’s `jarl` option, `/anti-slop --jarl path`, or
 the script’s `--jarl jarl`; its validated diagnostics are namespaced as
-`jarl/<rule>` and it is never used as a parser fallback. See the
-`r-c-anti-slop` skill for the exact rule scope and review workflow.
+`jarl/<rule>` and it is never used as a parser fallback. Text and JSON
+results disclose whether Jarl ran, every disabled native rule, the
+untruncated finding count, and whether output was capped, giving
+reviewers explicit evidence to reject copied partial trees and
+suppressed profiles as full-repository audits. See the `r-c-anti-slop`
+skill for the exact rule scope and review workflow.
 
 ### Expert decision discipline and cache behavior
 

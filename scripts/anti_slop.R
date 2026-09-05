@@ -296,12 +296,48 @@ r_unwrap_parentheses <- function(node) {
   r_unwrap_parentheses(children[[1]])
 }
 
+r_is_boolean_operator <- function(node) {
+  if (is.null(node)) return(FALSE)
+  if (!identical(node_type(node), "binary_operator")) return(FALSE)
+  node_name(node_field(node, "operator")) %in% c("&&", "||", "&", "|")
+}
+
+r_boolean_aggregate_arguments <- function(node) {
+  if (is.null(node)) return(list())
+  node <- r_unwrap_parentheses(node)
+  if (!identical(node_type(node), "call")) return(list())
+  if (!function_name(node) %in% c("all", "any")) return(list())
+  arguments <- Filter(function(argument) node_name(node_field(argument, "name")) != "na.rm", call_argument_nodes(node))
+  values <- lapply(arguments, node_field, "value")
+  if (length(values) != 1L) return(values)
+  candidate <- r_unwrap_parentheses(values[[1]])
+  if (!identical(node_type(candidate), "call")) return(values)
+  if (!identical(function_name(candidate), "c")) return(values)
+  lapply(call_argument_nodes(candidate), node_field, "value")
+}
+
 r_boolean_clause_count <- function(node) {
   node <- r_unwrap_parentheses(node)
-  if (!identical(node_type(node), "binary_operator") || !node_name(node_field(node, "operator")) %in% c("&&", "||", "&", "|")) {
-    return(1L)
+  if (r_is_boolean_operator(node)) {
+    return(r_boolean_clause_count(node_field(node, "lhs")) + r_boolean_clause_count(node_field(node, "rhs")))
   }
-  r_boolean_clause_count(node_field(node, "lhs")) + r_boolean_clause_count(node_field(node, "rhs"))
+  arguments <- r_boolean_aggregate_arguments(node)
+  if (length(arguments) > 0L) return(sum(vapply(arguments, r_boolean_clause_count, integer(1))))
+  1L
+}
+
+r_boolean_expression_sites <- function(root) {
+  sites <- list()
+  visit <- function(node) {
+    is_boolean_expression <- r_is_boolean_operator(node) || length(r_boolean_aggregate_arguments(node)) > 0L
+    if (is_boolean_expression && r_boolean_clause_count(node) > 3L) {
+      sites[[length(sites) + 1L]] <<- node
+      return()
+    }
+    for (child in node_named_children(node)) visit(child)
+  }
+  visit(root)
+  sites
 }
 
 r_is_length_call <- function(node) {
@@ -689,14 +725,14 @@ find_r_cyclomatic_complexity <- function(root, path, severity) {
 }
 
 find_r_conditional_sprawl <- function(root, path, severity) {
-  lapply(Filter(function(condition) r_boolean_clause_count(condition) > 3L, r_condition_sites(root)), function(condition) {
-    count <- r_boolean_clause_count(condition)
+  lapply(r_boolean_expression_sites(root), function(expression) {
+    count <- r_boolean_clause_count(expression)
     new_finding(
       "r-conditional-sprawl", severity,
       sprintf(
-        "This conditional has %d atomic boolean clauses. State and justify its one decision/admission invariant; split only where distinct invariants really exist.", count
+        "This boolean expression has %d atomic clauses. State and justify its one decision/admission invariant; assigning it to a one-use alias does not reduce the decision structure.", count
       ),
-      path, condition
+      path, expression
     )
   })
 }
@@ -964,13 +1000,23 @@ find_jarl_findings <- function(command, paths) {
 }
 
 format_text <- function(result) {
+  finding_summary <- if (result$truncated) {
+    sprintf("%d of %d finding(s)", length(result$findings), result$total_finding_count)
+  } else {
+    sprintf("%d finding(s)", result$total_finding_count)
+  }
+  disabled_rules <- if (length(result$disabled_rules) > 0L) paste(result$disabled_rules, collapse = ",") else "none"
   header <- sprintf(
-    "%s: %s (%s): %d finding(s) across %d file(s)",
+    "%s: %s (%s): %s across %d file(s); engines=tree-sitter:%s,jarl:%s; disabled_rules=%s; truncated=%s",
     result$path,
     if (result$ok) "parsed" else "parse error",
     result$language,
-    length(result$findings),
-    length(result$files)
+    finding_summary,
+    length(result$files),
+    result$engines$tree_sitter,
+    result$engines$jarl,
+    disabled_rules,
+    tolower(as.character(result$truncated))
   )
   if (length(result$findings) == 0L) return(header)
   lines <- vapply(result$findings, function(finding) {
@@ -1038,9 +1084,11 @@ main <- function(args = commandArgs(trailingOnly = TRUE)) {
     private_helper_calls = call_scope$counts,
     call_scope = call_scope
   )
+  jarl_status <- "off"
   if (!is.null(options$jarl)) {
     parsed_ok <- vapply(parsed_sources, function(source) length(source$parse_errors) == 0L, logical(1))
     jarl_paths <- paths[languages == "r" & parsed_ok]
+    jarl_status <- if (length(jarl_paths) > 0L) "ran" else "no-r-input"
     jarl_findings <- find_jarl_findings(options$jarl, jarl_paths)
     analysis_paths <- vapply(analyses, `[[`, character(1), "path")
     for (finding in jarl_findings) {
@@ -1049,11 +1097,16 @@ main <- function(args = commandArgs(trailingOnly = TRUE)) {
       analyses[[index]]$findings <- c(analyses[[index]]$findings, list(finding))
     }
   }
-  findings <- head(unname(unlist(lapply(analyses, `[[`, "findings"), recursive = FALSE)), max_findings)
+  all_findings <- unname(unlist(lapply(analyses, `[[`, "findings"), recursive = FALSE))
+  findings <- head(all_findings, max_findings)
   result <- list(
     path = input_path,
     language = if (length(unique(languages)) == 1L) languages[[1]] else "mixed",
     ok = all(vapply(analyses, `[[`, logical(1), "ok")),
+    engines = list(tree_sitter = "ran", jarl = jarl_status),
+    disabled_rules = unname(as.list(names(config$rules)[config$rules == "off"])),
+    total_finding_count = length(all_findings),
+    truncated = length(all_findings) > max_findings,
     files = lapply(analyses, function(analysis) list(
       path = analysis$path,
       language = analysis$language,

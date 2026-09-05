@@ -49,6 +49,8 @@ expect_identical(
 
 limited_r_result <- parse_result("--max-findings", "1", r_path)
 expect_identical(length(limited_r_result$findings), 1L, "--max-findings must bound emitted diagnostics")
+expect_identical(limited_r_result$truncated, TRUE, "A bounded result must disclose truncation")
+expect_identical(limited_r_result$total_finding_count, 4L, "A bounded result must preserve its total finding count")
 inline_limited_r_result <- parse_result("--language=r", "--max-findings=1", r_path)
 expect_identical(length(inline_limited_r_result$findings), 1L, "Inline option values must match separate option values")
 
@@ -79,6 +81,34 @@ if (!any(grepl(".once has 1 direct call site", vapply(private_findings, `[[`, ch
   fail("Private-helper diagnostics must report direct call-site counts")
 }
 
+aliased_condition_path <- file.path(work, "aliased-condition.R")
+writeLines(c(
+  "display_name <- function(nm) {",
+  "  valid_name <- !is.null(nm) && length(nm) == 1L && !is.na(nm) && nzchar(nm)",
+  "  if (valid_name) return(nm)",
+  "  NA_character_",
+  "}",
+  "display_name_all <- function(nm) {",
+  "  valid_name <- all(c(!is.null(nm), length(nm) == 1L, !is.na(nm), nzchar(nm)))",
+  "  if (valid_name) return(nm)",
+  "  NA_character_",
+  "}"
+), aliased_condition_path)
+aliased_condition_result <- parse_result(aliased_condition_path)
+aliased_condition_findings <- Filter(
+  function(finding) identical(finding$rule, "r-conditional-sprawl"),
+  aliased_condition_result$findings
+)
+aliased_condition_checks <- c(
+  length(aliased_condition_findings) == 2L,
+  all(vapply(aliased_condition_findings, function(finding) {
+    grepl("!is.null(nm)", finding$excerpt, fixed = TRUE)
+  }, logical(1)))
+)
+if (!all(aliased_condition_checks)) {
+  fail("Assigning a sprawling boolean expression or all(c(...)) equivalent to a one-use alias must not evade the conditional-sprawl rule")
+}
+
 valid_r_path <- file.path(work, "valid.R")
 writeLines(c(
   "f <- function(x) {",
@@ -88,6 +118,8 @@ writeLines(c(
 ), valid_r_path)
 valid_r_result <- parse_result(valid_r_path)
 expect_identical(length(valid_r_result$findings), 0L, "A normal scalar admission guard must not be diagnosed")
+expect_identical(valid_r_result$engines$jarl, "off", "Results must disclose that Jarl was not requested")
+expect_identical(length(valid_r_result$disabled_rules), 0L, "Default analysis must disclose that no rules were disabled")
 no_function_r_path <- file.path(work, "no-function.R")
 writeLines("value <- 1L", no_function_r_path)
 no_function_r_result <- parse_result(no_function_r_path)
@@ -140,8 +172,8 @@ predicate_r_result <- parse_result(predicate_r_path)
 predicate_rules <- vapply(predicate_r_result$findings, `[[`, character(1), "rule")
 expect_identical(
   sort(predicate_rules),
-  sort(c("r-single-use-predicate-helper", "r-scalar-validator-helper", "r-path-threat-model")),
-  "Translated scalar validators, one-use predicate chains, and false path threat models must be diagnosed"
+  sort(c("r-single-use-predicate-helper", "r-scalar-validator-helper", "r-path-threat-model", "r-conditional-sprawl")),
+  "Translated scalar validators, sprawling predicates, one-use predicate chains, and false path threat models must be diagnosed"
 )
 
 reused_predicate_path <- file.path(work, "reused-predicate.R")
@@ -221,6 +253,7 @@ configured_c_result <- parse_result("--config", config_path, c_path)
 if ("c-runtime-assert" %in% vapply(configured_c_result$findings, `[[`, character(1), "rule")) {
   fail("Rule configuration must disable c-runtime-assert")
 }
+expect_identical(configured_c_result$disabled_rules, list("c-runtime-assert"), "Results must disclose disabled rules")
 empty_config_path <- file.path(work, "empty-rules.json")
 writeLines("{}", empty_config_path)
 empty_config_result <- parse_result("--config", empty_config_path, c_path)
@@ -263,6 +296,9 @@ if (.Platform$OS.type != "windows") {
   writeLines(c("#!/bin/sh", "cat <<'JARL_JSON'", jarl_payload, "JARL_JSON", "exit 1"), fake_jarl_path)
   Sys.chmod(fake_jarl_path, mode = "0755")
   jarl_result <- parse_result("--jarl", fake_jarl_path, valid_r_path)
+  expect_identical(jarl_result$engines$jarl, "ran", "Results must prove that requested Jarl analysis ran")
+  jarl_c_result <- parse_result("--jarl", fake_jarl_path, c_path)
+  expect_identical(jarl_c_result$engines$jarl, "no-r-input", "Results must distinguish a Jarl request with no R input")
   jarl_findings <- Filter(function(finding) startsWith(finding$rule, "jarl/"), jarl_result$findings)
   if (length(jarl_findings) != 1L) {
     fail("Requested Jarl diagnostics must be validated, namespaced, and normalized to one-based locations")
