@@ -57,26 +57,22 @@ test("context hook does not persist or accumulate bounded copies", async () => {
   assert.equal(first.messages[0].content[0].text, second.messages[0].content[0].text);
 });
 
-test("a result already sent in full never flips to a stub once new results arrive", () => {
-  const settled = new Map<string, boolean>();
-  const early = { role: "toolResult", toolName: "bash", toolCallId: "1", content: [{ type: "text", text: "1-" + "x".repeat(5000) }] };
-
-  const turn1 = boundInspectionResults([early], 6000, 11_000, settled);
-  assert.match(turn1[0].content[0]?.text ?? "", /^1-/, "fits alone and is kept in full");
-
-  // A second, larger result arrives on a later turn. Under a naive trailing-byte window this
-  // would push `early` out of budget and rewrite content the provider may have already cached.
-  const late = { role: "toolResult", toolName: "read", toolCallId: "2", content: [{ type: "text", text: "2-" + "x".repeat(9000) }] };
-  const turn2 = boundInspectionResults([early, late], 10_000, 11_000, settled);
-  assert.match(turn2[0].content[0]?.text ?? "", /^1-/, "already-settled result stays full even though it no longer fits the naive window");
-  assert.match(turn2[1].content[0]?.text ?? "", /earlier read result/, "the new, larger result is stubbed instead of the settled one");
+test("new evidence displaces old history rather than consuming a lifetime quota", () => {
+  const history = Array.from({ length: 16 }, (_, i) => ({
+    role: "toolResult", toolName: "read", toolCallId: String(i), content: [{ type: "text", text: "x".repeat(4096) }],
+  }));
+  for (let i = 1; i <= history.length; i++) boundInspectionResults(history.slice(0, i), 4096, 65536);
+  const fresh = { role: "toolResult", toolName: "read", toolCallId: "fresh", content: [{ type: "text", text: "NEW EVIDENCE" }] };
+  const first = boundInspectionResults([...history, fresh], 4096, 65536);
+  assert.equal(first.at(-1)?.content[0].text, "NEW EVIDENCE");
+  assert.match(first[0].content[0].text, /omitted/);
+  const retry = { ...fresh, toolCallId: "retry" };
+  assert.equal(boundInspectionResults([...history, fresh, retry], 4096, 65536).at(-1)?.content[0].text, "NEW EVIDENCE");
 });
 
-test("new results are still recency-prioritized against the budget that remains", () => {
-  const settled = new Map<string, boolean>();
-  const a = { role: "toolResult", toolName: "bash", toolCallId: "a", content: [{ type: "text", text: "a-" + "x".repeat(5000) }] };
-  const b = { role: "toolResult", toolName: "bash", toolCallId: "b", content: [{ type: "text", text: "b-" + "x".repeat(5000) }] };
-  const bounded = boundInspectionResults([a, b], 6000, 6000, settled);
-  assert.match(bounded[0].content[0]?.text ?? "", /earlier bash result/, "older of two simultaneously-new results is stubbed");
-  assert.match(bounded[1].content[0]?.text ?? "", /^b-/, "newer of two simultaneously-new results is kept");
+test("the newest large result fits even when the total cap is below the per-result cap", () => {
+  const fresh = { role: "toolResult", toolName: "read", content: [{ type: "text", text: "HEAD-" + "x".repeat(50000) }] };
+  const bounded = boundInspectionResults([fresh], 50000, 16384);
+  assert.match(bounded[0].content[0].text, /^HEAD-/);
+  assert(Buffer.byteLength(bounded[0].content[0].text) <= 16384);
 });

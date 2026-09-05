@@ -4,19 +4,19 @@ import { rlmToolParamsSchema, type RlmToolParams } from "./schema.js";
 import { RunStore } from "./runs.js";
 import type { RunRecord, StartRunInput } from "./types.js";
 import { RLM_LUNA_MODEL, RLM_PROMPT_GUIDELINES } from "./policy.js";
+import { COMPLETION_READY, COMPLETION_OBSERVED } from "../completions/index.js";
 
 const defaultWaitTimeoutMs = 120000;
 const defaultTimeoutMs = 180000;
 
-export default function extension(pi: ExtensionAPI): void {
-  const runs = new RunStore(1);
+export default function extension(pi: ExtensionAPI, runs = new RunStore(1)): void {
   let shuttingDown = false;
 
   pi.registerTool({
     name: "rlm",
     label: "RLM",
     description:
-      "Long-context controller with externalized file/data inspection and system-R evaluation. Starts detached by default so the Pi session remains interactive, then emits one bounded completion wakeup. Set async=false only for a short blocking call. Recursion is explicit, shallow, serial, and budgeted.",
+      "Long-context controller with externalized file/data inspection and system-R evaluation. Starts detached by default so the Pi session remains interactive, then batches unobserved completions when Pi is idle. Targeted status/wait responses suppress an already-consumed completion. Set async=false only for a short blocking call. Recursion is explicit, shallow, serial, and budgeted.",
     promptGuidelines: [...RLM_PROMPT_GUIDELINES],
     parameters: rlmToolParamsSchema,
     async execute(_toolCallId, params: RlmToolParams, signal, onUpdate, ctx) {
@@ -38,10 +38,12 @@ export default function extension(pi: ExtensionAPI): void {
         );
 
         if (input.async) {
-          void notifyWhenComplete(pi, record, () => shuttingDown).catch(() => undefined);
+          if (input.notifyOnCompletion !== false) {
+            void notifyWhenComplete(pi, record, () => shuttingDown, ctx.sessionManager.getSessionId()).catch((error) => console.error("[rlm] completion failed:", error));
+          }
           const disposition = record.status === "queued" ? "queued behind the active controller" : "started in background";
           return {
-            content: [{ type: "text", text: `RLM run ${disposition}. Pi remains interactive and will receive one completion wakeup.\nrun_id: ${record.id}` }],
+            content: [{ type: "text", text: `RLM run ${disposition}. Pi remains interactive. Unobserved completions are batched at idle unless notifications are disabled.\nrun_id: ${record.id}` }],
             details: toRunDetails(record),
           };
         }
@@ -57,6 +59,7 @@ export default function extension(pi: ExtensionAPI): void {
         if (params.id) {
           const record = runs.get(params.id);
           if (!record) throw new Error(`Unknown run id: ${params.id}`);
+          observeRuns(pi, ctx.sessionManager.getSessionId(), [record]);
           return { content: [{ type: "text", text: describeRecord(record) }], details: toRunDetails(record) };
         }
         const list = runs.list();
@@ -77,6 +80,7 @@ export default function extension(pi: ExtensionAPI): void {
             details: { ...toRunDetails(record), done: false },
           };
         }
+        observeRuns(pi, ctx.sessionManager.getSessionId(), [record]);
         return {
           content: [{ type: "text", text: describeRecord(record) }],
           details: { ...toRunDetails(record), done: true },
@@ -85,6 +89,7 @@ export default function extension(pi: ExtensionAPI): void {
 
       if (op === "cancel") {
         const record = runs.cancel(params.id);
+        observeRuns(pi, ctx.sessionManager.getSessionId(), [record]);
         return {
           content: [{ type: "text", text: `Cancellation requested for run ${record.id}. Current status: ${record.status}` }],
           details: toRunDetails(record),
@@ -109,38 +114,40 @@ export async function notifyWhenComplete(
   pi: ExtensionAPI,
   record: RunRecord,
   isShuttingDown: () => boolean,
+  sessionId: string,
 ): Promise<void> {
   await record.promise.then(
     (result) => {
       if (isShuttingDown()) return;
-      pi.sendMessage(
-        {
-          customType: "rlm-completion",
-          content: [
-            `RLM background run ${record.id} completed.`,
-            `Artifacts: ${result.artifacts.dir}`,
-            `Final (bounded): ${shorten(result.final, 2000)}`,
-          ].join("\n"),
-          display: true,
-          details: toRunDetails(record),
-        },
-        { deliverAs: "followUp", triggerTurn: true },
-      );
+      pi.events.emit(COMPLETION_READY, {
+        sessionId,
+        key: `rlm:${record.id}`,
+        content: [
+          `RLM background run ${record.id} ${record.status}.`,
+          `Artifacts: ${result.artifacts.dir}`,
+          `Final (bounded): ${shorten(result.final, 2000)}`,
+        ].join("\n"),
+        wake: true,
+      });
     },
     (error: unknown) => {
       if (isShuttingDown()) return;
       const message = error instanceof Error ? error.message : String(error);
-      pi.sendMessage(
-        {
-          customType: "rlm-completion",
-          content: `RLM background run ${record.id} ${record.status}.\nError: ${shorten(message, 1000)}\nArtifacts: ${record.artifactsDir}`,
-          display: true,
-          details: toRunDetails(record),
-        },
-        { deliverAs: "followUp", triggerTurn: true },
-      );
+      pi.events.emit(COMPLETION_READY, {
+        sessionId,
+        key: `rlm:${record.id}`,
+        content: `RLM background run ${record.id} ${record.status}.\nError: ${shorten(message, 1000)}\nArtifacts: ${record.artifactsDir}`,
+        wake: true,
+      });
     },
   );
+}
+
+function observeRuns(pi: ExtensionAPI, sessionId: string, records: RunRecord[]): void {
+  pi.events.emit(COMPLETION_OBSERVED, {
+    sessionId,
+    keys: records.filter((record) => record.status !== "running" && record.status !== "queued").map((record) => `rlm:${record.id}`),
+  });
 }
 
 export function resolveStartInput(params: RlmToolParams, cwd: string): StartRunInput {
@@ -152,6 +159,7 @@ export function resolveStartInput(params: RlmToolParams, cwd: string): StartRunI
     cwd: params.cwd ?? cwd,
     backend: params.backend ?? "cli",
     async: params.async ?? true,
+    notifyOnCompletion: params.notifyOnCompletion ?? true,
     model: params.model ?? RLM_LUNA_MODEL,
     subModel: params.subModel ?? RLM_LUNA_MODEL,
     thinking: params.thinking,

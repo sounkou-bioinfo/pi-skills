@@ -364,4 +364,15 @@ if (unknown_result$code == 0L || !grepl("Cannot infer language", unknown_result$
   fail("An unknown source suffix must fail explicitly rather than use a parser fallback")
 }
 
+literal_path <- file.path(work, "literal-branches.R")
+writeLines(c(
+  'literal_difference <- function(x) { if (is.null(x)) "a b" else "ab" }',
+  'operator_difference <- function(x) { if (is.null(x)) 1 + 2 else 1 - 2 }',
+  'format_only <- function(x) { if (is.null(x)) { 1+2 } else { 1 + 2 } }'
+), literal_path)
+literal_result <- parse_result(literal_path)
+identical_branches <- Filter(function(finding) finding$rule == "r-identical-if-branches", literal_result$findings)
+expect_identical(length(identical_branches), 1L, "Only whitespace outside tokens may be ignored when comparing branches")
+expect_identical(identical_branches[[1]]$line, 3L, "Different literals and operators must not be declared identical")
+
 message("anti-slop tests passed")

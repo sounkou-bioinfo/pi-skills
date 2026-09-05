@@ -204,7 +204,12 @@ node_name <- function(node) {
   trimws(node_text(node))
 }
 
-normalized_node_text <- function(node) gsub("[[:space:]]+", "", node_text(node))
+node_syntax <- function(node) {
+  children <- treesitter::node_children(node)
+  if (length(children) == 0L) return(list(type = node_type(node), text = node_text(node)))
+  children <- Filter(function(child) node_type(child) != "comment", children)
+  list(type = node_type(node), children = lapply(children, node_syntax))
+}
 
 node_location <- function(node) {
   start <- treesitter::node_start_point(node)
@@ -533,7 +538,7 @@ find_r_duplicate_adjacent_guard <- function(root, path, severity) {
       first_consequence <- node_field(first, "consequence")
       if (is.null(first_condition) || is.null(second_condition) || is.null(first_consequence)) next
       if (!r_pure_guard(first_condition) || !r_terminates(first_consequence)) next
-      if (identical(normalized_node_text(first_condition), normalized_node_text(second_condition))) {
+      if (identical(node_syntax(first_condition), node_syntax(second_condition))) {
         findings[[length(findings) + 1L]] <<- new_finding(
           "r-duplicate-adjacent-guard", severity,
           "An immediately preceding pure guard has the same condition and terminates; this guard is unreachable or redundant.",
@@ -586,7 +591,7 @@ find_r_identical_if_branches <- function(root, path, severity) {
     alternative <- node_field(node, "alternative")
     if (any(vapply(list(condition, consequence, alternative), is.null, logical(1)))) return()
     if (!r_pure_guard(condition)) return()
-    if (!identical(normalized_node_text(consequence), normalized_node_text(alternative))) return()
+    if (!identical(node_syntax(consequence), node_syntax(alternative))) return()
     findings[[length(findings) + 1L]] <<- new_finding(
       "r-identical-if-branches", severity,
       "A side-effect-free condition selects identical branches; remove the conditional after confirming that forcing the condition is not part of the contract.",
@@ -803,7 +808,7 @@ find_c_duplicate_adjacent_guard <- function(root, path, severity) {
       first_consequence <- node_field(first, "consequence")
       if (is.null(first_condition) || is.null(second_condition) || is.null(first_consequence)) next
       if (!c_pure_guard(first_condition) || !c_is_return_statement(first_consequence)) next
-      if (identical(normalized_node_text(first_condition), normalized_node_text(second_condition))) {
+      if (identical(node_syntax(first_condition), node_syntax(second_condition))) {
         findings[[length(findings) + 1L]] <<- new_finding(
           "c-duplicate-adjacent-guard", severity,
           "An immediately preceding side-effect-free guard has the same condition and returns; this guard is unreachable or redundant.",

@@ -20,23 +20,9 @@ type CandidateToolResult = {
 export default function contextBudgetExtension(pi: ExtensionAPI): void {
   const maxBytes = configuredByteLimit(process.env.PI_CONTEXT_TOOL_RESULT_BYTES);
   const totalBytes = configuredTotalByteLimit(process.env.PI_CONTEXT_TOOL_RESULTS_TOTAL_BYTES);
-  let sessionId: string | undefined;
-  let settled = new Map<string, boolean>();
-
-  function resetForSession(nextSessionId: string | undefined) {
-    if (sessionId === nextSessionId) return;
-    sessionId = nextSessionId;
-    settled = new Map();
-  }
-
-  pi.on("session_start", async (_event, ctx) => resetForSession(ctx.sessionManager.getSessionId()));
-  pi.on("session_tree", async (_event, ctx) => resetForSession(ctx.sessionManager.getSessionId()));
-  pi.on("session_shutdown", async () => resetForSession(undefined));
-
-  pi.on("context", async (event, ctx) => {
-    resetForSession(ctx.sessionManager.getSessionId());
-    return { messages: boundInspectionResults(event.messages, maxBytes, totalBytes, settled) };
-  });
+  pi.on("context", async (event) => ({
+    messages: boundInspectionResults(event.messages, maxBytes, totalBytes),
+  }));
 }
 
 export function boundToolResult<T>(message: T, maxBytes = DEFAULT_TOOL_RESULT_BYTES): T {
@@ -57,46 +43,23 @@ export function boundToolResult<T>(message: T, maxBytes = DEFAULT_TOOL_RESULT_BY
   } as T;
 }
 
-// `settled` freezes each result's full-vs-stubbed fate the first time it is evaluated, keyed by
-// toolCallId. A result already sent to the model in full must never flip to a stub later: doing so
-// would rewrite already-transmitted history and invalidate provider-side prompt caching for every
-// turn since. Only newly-seen results compete for the remaining budget, prioritizing recency among
-// themselves; results without a toolCallId cannot be memoized and are re-evaluated every call.
+// Retain the newest evidence, not a lifetime quota of the first results seen.
+// Evicting old text can invalidate a cached prefix; hiding fresh reads is worse.
 export function boundInspectionResults<T>(
   messages: T[],
   maxBytes = DEFAULT_TOOL_RESULT_BYTES,
   totalBytes = DEFAULT_TOTAL_TOOL_RESULT_BYTES,
-  settled: Map<string, boolean> = new Map(),
 ): T[] {
-  const bounded = messages.map((message) => boundToolResult(message, maxBytes));
-  const pending: Array<{ index: number; id: string | undefined; bytes: number }> = [];
-  let committedBytes = 0;
-
-  for (let index = 0; index < bounded.length; index++) {
+  const bounded = messages.map((message) => boundToolResult(message, Math.min(maxBytes, totalBytes)));
+  let remaining = totalBytes;
+  for (let index = bounded.length - 1; index >= 0; index--) {
     const message = bounded[index] as CandidateToolResult;
     if (message.role !== "toolResult" || !message.toolName || !BOUNDED_TOOLS.has(message.toolName)) continue;
     if (!message.content || message.content.some((part) => part.type !== "text" || typeof part.text !== "string")) continue;
     const bytes = Buffer.byteLength(message.content.map((part) => part.text ?? "").join("\n"), "utf8");
-    const fate = message.toolCallId !== undefined ? settled.get(message.toolCallId) : undefined;
-    if (fate === true) {
-      bounded[index] = stubResult(bounded[index] as object, message.toolName, bytes) as T;
-    } else if (fate === false) {
-      committedBytes += bytes;
-    } else {
-      pending.push({ index, id: message.toolCallId, bytes });
-    }
+    if (bytes <= remaining) remaining -= bytes;
+    else bounded[index] = stubResult(bounded[index] as object, message.toolName, bytes) as T;
   }
-
-  let remaining = Math.max(0, totalBytes - committedBytes);
-  for (let i = pending.length - 1; i >= 0; i--) {
-    const { index, id, bytes } = pending[i];
-    const message = bounded[index] as CandidateToolResult;
-    const keepFull = bytes <= remaining;
-    if (keepFull) remaining -= bytes;
-    else bounded[index] = stubResult(bounded[index] as object, message.toolName!, bytes) as T;
-    if (id !== undefined) settled.set(id, !keepFull);
-  }
-
   return bounded;
 }
 

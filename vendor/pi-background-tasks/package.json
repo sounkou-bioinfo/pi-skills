@@ -1,0 +1,74 @@
+{
+  "name": "pi-background-tasks",
+  "version": "0.6.0",
+  "description": "Claude-Code-like named background shell task manager for Pi: bg_run tools, /bg commands, Shift+Down footer dock, bounded logs, kill/timeout safety, and completion wakeups.",
+  "type": "module",
+  "license": "ISC",
+  "author": "Ismail <ismailsalikhodjaev@gmail.com>",
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "background-tasks",
+    "coding-agent",
+    "shell",
+    "tasks"
+  ],
+  "homepage": "https://github.com/ismailsaleekh/pi-background-tasks#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ismailsaleekh/pi-background-tasks.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ismailsaleekh/pi-background-tasks/issues"
+  },
+  "files": [
+    "extensions/",
+    "src/",
+    "README.md",
+    "TESTING.md",
+    "TEST_PLAN.md",
+    "PUBLISHING.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test:type-safety": "tsx --test tests/package/type-safety.test.ts",
+    "test:unit": "tsx --test tests/unit/**/*.test.ts",
+    "test:sdk": "tsx --test tests/sdk/**/*.test.ts",
+    "test:rpc": "tsx --test tests/rpc/**/*.test.ts",
+    "test:component": "tsx --test tests/component/**/*.test.ts",
+    "test:package": "tsx --test tests/package/**/*.test.ts",
+    "test": "npm run typecheck && npm run test:type-safety && npm run test:unit && npm run test:sdk && npm run test:rpc && npm run test:component && npm run test:package",
+    "test:pty": "tsx --test tests/pty/**/*.test.ts",
+    "test:agent-loop": "tsx --test tests/scripted-provider/**/*.test.ts",
+    "test:full": "npm run test && npm run test:pty && npm run test:agent-loop",
+    "smoke": "pi --no-extensions -e ./extensions/background-tasks.ts --offline --no-tools --no-session -p \"/jobs\"",
+    "pack:dry-run": "npm pack --dry-run"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/background-tasks.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.75.5",
+    "@earendil-works/pi-coding-agent": "^0.75.5",
+    "@earendil-works/pi-tui": "^0.75.5",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.0",
+    "typebox": "^1.1.38",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

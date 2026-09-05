@@ -13,6 +13,7 @@ export interface StartRunInput {
   cwd: string;
   backend: RlmBackend;
   async: boolean;
+  notifyOnCompletion?: boolean;
   model: string;
   subModel: string;
   thinking?: ThinkingLevel;
@@ -90,6 +91,7 @@ export interface RlmRunResult {
 
 export interface RunRecord {
   id: string;
+  ownerPid?: number;
   createdAt: number;
   startedAt?: number;
   finishedAt?: number;

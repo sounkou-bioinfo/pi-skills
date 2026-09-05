@@ -7,7 +7,7 @@ import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { completeWithCli } from "./backends.js";
 import { loadFileContext } from "./engine.js";
-import { notifyWhenComplete, resolveStartInput } from "./index.js";
+import rlmExtension, { notifyWhenComplete, resolveStartInput } from "./index.js";
 import { RLM_LUNA_MODEL, RLM_SOL_MODEL, RLM_TERRA_MODEL, resolveNodePolicy, resolveThinkingLevel } from "./policy.js";
 import { PLANNER_SYSTEM_PROMPT, SYNTHESIS_SYSTEM_PROMPT, WORKER_SYSTEM_PROMPT, plannerPrompt } from "./prompts.js";
 import { evalInRepl } from "./repl.js";
@@ -76,12 +76,11 @@ test("RLM role system prompts are byte-stable while planner runtime data stays i
   assert(Buffer.byteLength(SYNTHESIS_SYSTEM_PROMPT, "utf8") <= 2_000);
 });
 
-test("detached RLM completion emits one bounded follow-up wakeup", async () => {
-  const sent: Array<{ message: unknown; options: unknown }> = [];
+test("detached RLM completion publishes a scoped notice, not a host follow-up", async () => {
+  const sent: Array<{ channel: string; notice: any }> = [];
   const pi = {
-    sendMessage(message: unknown, options: unknown) {
-      sent.push({ message, options });
-    },
+    events: { emit(channel: string, notice: unknown) { sent.push({ channel, notice }); } },
+    sendMessage() { assert.fail("must not enqueue a host follow-up"); },
   } as unknown as ExtensionAPI;
   const result = fakeResult("notify", "/tmp");
   result.final = "x".repeat(5000);
@@ -96,14 +95,16 @@ test("detached RLM completion emits one bounded follow-up wakeup", async () => {
     cancel() {},
   };
 
-  await notifyWhenComplete(pi, record, () => false);
+  await notifyWhenComplete(pi, record, () => false, "session-one");
 
   assert.equal(sent.length, 1);
-  const message = sent[0]?.message as { customType: string; content: string };
-  assert.equal(message.customType, "rlm-completion");
-  assert.match(message.content, /RLM background run notify completed/);
-  assert(message.content.length < 2300);
-  assert.deepEqual(sent[0]?.options, { deliverAs: "followUp", triggerTurn: true });
+  assert.equal(sent[0].channel, "pi-skills:completion-ready");
+  assert.equal(sent[0].notice.sessionId, "session-one");
+  assert.equal(sent[0].notice.key, "rlm:notify");
+  assert.match(sent[0].notice.content, /RLM background run notify completed/);
+  assert(sent[0].notice.content.length < 2300);
+  await notifyWhenComplete(pi, record, () => true, "session-one");
+  assert.equal(sent.length, 1, "shutdown must suppress late publication");
 });
 
 test("file context uses a Git-aware manifest and prioritizes authorities", async () => {
@@ -132,7 +133,7 @@ test("file context uses a Git-aware manifest and prioritizes authorities", async
     assert.equal(files.find((file) => file.path === "binary.dat")?.omittedReason, "binary");
     assert(!files.some((file) => file.path.includes("artifact.txt")));
     const lazyRead = await evalInRepl('return await readFile("large.txt")', { kind: "files", root, files });
-    assert(lazyRead.startsWith("x".repeat(100)));
+    assert(lazyRead.startsWith("x".repeat(100)), lazyRead);
     assert(lazyRead.endsWith("..."));
     assert.equal(await evalInRepl("return typeof process", { kind: "files", root, files }), "undefined");
     assert((await evalInRepl('return readFile.constructor("return process")()', { kind: "files", root, files })).startsWith("repl error:"));
@@ -153,7 +154,8 @@ test("CLI completion streams JSON events and disables nested orchestration surfa
       [
         "#!/usr/bin/env node",
         'import { writeFileSync } from "node:fs";',
-        'writeFileSync(process.env.FAKE_PI_ARGS_PATH, JSON.stringify(process.argv.slice(2)));',
+        'const chunks = []; for await (const chunk of process.stdin) chunks.push(chunk);',
+        'writeFileSync(process.env.FAKE_PI_ARGS_PATH, JSON.stringify({ args: process.argv.slice(2), prompt: Buffer.concat(chunks).toString() }));',
         'const payload = "x".repeat(10000);',
         'for (let i = 0; i < 2000; i++) process.stdout.write(JSON.stringify({type:"message_update", delta:payload}) + "\\n");',
         'process.stdout.write(JSON.stringify({type:"message_end", message:{role:"assistant", content:[{type:"text", text:"bounded result"}]}}) + "\\n");',
@@ -165,14 +167,17 @@ test("CLI completion streams JSON events and disables nested orchestration surfa
     const result = await completeWithCli({
       model: "openai-codex/test",
       thinking: "low",
-      prompt: "test",
+      prompt: "x".repeat(200000),
       systemPrompt: "controller",
       cwd: root,
       piBin: fakePi,
     });
     assert.equal(result.exitCode, 0);
     assert.equal(result.text, "bounded result");
-    const args = JSON.parse(await readFile(argsPath, "utf8")) as string[];
+    const invocation = JSON.parse(await readFile(argsPath, "utf8"));
+    const args = invocation.args as string[];
+    assert.equal(invocation.prompt, "x".repeat(200000));
+    assert(args.every((arg) => arg.length < 200000), "large prompt must travel over stdin, not argv");
     for (const flag of ["--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files", "--system-prompt", "--thinking"]) {
       assert(args.includes(flag), `missing child isolation flag ${flag}`);
     }
@@ -196,6 +201,21 @@ test("CLI completion streams JSON events and disables nested orchestration surfa
     else process.env.FAKE_PI_ARGS_PATH = oldArgsPath;
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("REPL async loops cannot block host cancellation or the external deadline", async () => {
+  const context = { kind: "text" as const, text: "one\ntwo" };
+  const controller = new AbortController();
+  let entered = false;
+  const result = await evalInRepl('await callRlm("entered"); await Promise.resolve(); while (true) {}', context, {
+    signal: controller.signal,
+    callRlm: async () => { entered = true; setTimeout(() => controller.abort(), 30); return "ready"; },
+  });
+  assert(entered, result);
+  assert.match(result, /aborted/);
+  assert.match(await evalInRepl('await Promise.resolve(); while (true) {}', context, { timeoutMs: 200 }), /exceeded/);
+  assert.equal(await evalInRepl('return await callRlm("echo", context.text)', context, { callRlm: async (_task, value) => value }), "one\ntwo");
+  assert.equal(await evalInRepl('return grepText("two")[0]', context), "2: two");
 });
 
 test("system R evaluation is real and abortable", async () => {
@@ -231,6 +251,12 @@ test("run store serializes controllers and persists terminal records", async () 
     const second = store.start(startInput(), executor);
     assert.equal(first.status, "running");
     assert.equal(second.status, "queued");
+    const metadataBefore = await readFile(join(root, first.id, "run.json"), "utf8");
+    const observer = new RunStore(1, root);
+    assert.equal(observer.get(first.id), undefined, "a foreign live executor is not a resumable local run");
+    assert.equal(observer.get(second.id), undefined);
+    assert.equal(await readFile(join(root, first.id, "run.json"), "utf8"), metadataBefore);
+    assert.equal(first.status, "running");
 
     gates.shift()?.();
     await first.promise;
@@ -244,6 +270,24 @@ test("run store serializes controllers and persists terminal records", async () 
     const hydrated = new RunStore(1, root).get(second.id);
     assert.equal(hydrated?.status, "completed");
     assert.equal(hydrated?.result?.final, "ok");
+
+    let tool: any;
+    const observations: any[] = [];
+    rlmExtension({
+      registerTool(value: any) { tool = value; },
+      on() {},
+      events: { emit(channel: string, value: any) { observations.push({ channel, value }); } },
+    } as any, store);
+    const ctx = { sessionManager: { getSessionId: () => "observing-session" } };
+    await tool.execute("status", { op: "status", id: first.id }, undefined, undefined, ctx);
+    await tool.execute("wait", { op: "wait", id: second.id }, undefined, undefined, ctx);
+    await tool.execute("list", { op: "status" }, undefined, undefined, ctx);
+    assert.equal(observations.length, 2, "a summary-only run list does not consume individual results");
+    assert(observations.every((event) => event.channel === "pi-skills:completion-observed"));
+    assert.deepEqual(observations.map((event) => event.value), [
+      { sessionId: "observing-session", keys: [`rlm:${first.id}`] },
+      { sessionId: "observing-session", keys: [`rlm:${second.id}`] },
+    ]);
 
     const shutdownStore = new RunStore(1, join(root, "shutdown"));
     const blocked = (_runId: string, signal: AbortSignal) => new Promise<RlmRunResult>((_resolve, reject) => {

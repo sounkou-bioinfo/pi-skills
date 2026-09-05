@@ -60,7 +60,6 @@ export async function completeWithCli(input: {
       input.thinking,
       "--system-prompt",
       systemPromptPath,
-      input.prompt,
     ];
     const invocation = getPiInvocation(input.piBin, args);
 
@@ -68,7 +67,8 @@ export async function completeWithCli(input: {
       const proc = spawn(invocation.command, invocation.args, {
         cwd: input.cwd,
         shell: false,
-        stdio: ["ignore", "pipe", "pipe"],
+        detached: process.platform !== "win32",
+        stdio: ["pipe", "pipe", "pipe"],
       });
 
       let settled = false;
@@ -121,9 +121,17 @@ export async function completeWithCli(input: {
         if (input.signal) input.signal.removeEventListener("abort", kill);
         resolve(result);
       };
+      const sendSignal = (signal: NodeJS.Signals): void => {
+        try {
+          if (process.platform !== "win32" && proc.pid) process.kill(-proc.pid, signal);
+          else proc.kill(signal);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") streamError ||= `Unable to stop pi: ${String(error)}`;
+        }
+      };
       const kill = (): void => {
-        proc.kill("SIGTERM");
-        killTimer = setTimeout(() => proc.kill("SIGKILL"), 5000);
+        sendSignal("SIGTERM");
+        killTimer = setTimeout(() => sendSignal("SIGKILL"), 5000);
         killTimer.unref();
       };
 
@@ -135,7 +143,8 @@ export async function completeWithCli(input: {
       proc.on("close", (code, closeSignal) => {
         if (lineBuffer) consumeLine(lineBuffer.replace(/\r$/, ""));
         const aborted = input.signal?.aborted ?? false;
-        const exitCode = aborted ? 130 : closeSignal ? 128 : (code ?? 1);
+        if (aborted && process.platform !== "win32") sendSignal("SIGKILL");
+        const exitCode = aborted ? 130 : closeSignal ? 128 : streamError ? 1 : (code ?? 1);
         const diagnostic = [stderr, streamError, aborted ? "RLM model call aborted" : ""].filter(Boolean).join("\n");
         finish({ text: responseText, stderr: diagnostic, exitCode });
       });
@@ -144,6 +153,10 @@ export async function completeWithCli(input: {
         if (input.signal.aborted) kill();
         else input.signal.addEventListener("abort", kill, { once: true });
       }
+      proc.stdin.on("error", (error) => {
+        streamError ||= `Unable to send prompt to pi: ${error.message}`;
+      });
+      proc.stdin.end(input.prompt);
     });
   } finally {
     releaseSlot();

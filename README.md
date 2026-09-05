@@ -35,6 +35,8 @@ plus skill frontmatter.
   GTEx, FinnGen, and PheWeb.
 - `codex-web-search` — Native web search through Pi’s existing OpenAI
   Codex authentication, with grounded answers and source URLs.
+- `completions` — Session-owned completion batching: observed results
+  are suppressed before any idle wakeup is submitted.
 - `context-budget` — Transiently caps large built-in inspection results
   in model context while preserving full stored/UI results and
   deterministic recovery guidance.
@@ -47,15 +49,15 @@ plus skill frontmatter.
 - `memory` — Append-only Semantic-SQL memory with cache-safe task
   retrieval, bounded summary frontiers, historical `as_of`, graph
   traversal, and DuckDB FTS.
-- `rlm` — Detached-by-default single-controller long-context runs with
-  completion wakeups, bounded opt-in recursion, system `Rscript`
-  evaluation, and DuckDB-backed parquet sampling.
+- `rlm` — Detached single-controller runs with acknowledged completion
+  notices, terminable JavaScript workers, system `Rscript` evaluation,
+  and DuckDB-backed parquet sampling.
 - `vscode-path-links` — Disables Pi OSC 8 hyperlinks in VS Code
   terminals so native Remote-SSH and WSL path detection handles file
   clicks.
-- `background-tasks` — Named detachable shell tasks with bounded
-  external logs, status/kill tools, a focused TUI dock, and one
-  completion wakeup.
+- `background-tasks` — Vendored shell task manager with bounded logs,
+  signal-aware status/kill tools, a focused TUI dock, and acknowledged
+  completion notices.
 
 ### VS Code terminal path clicks
 
@@ -129,9 +131,11 @@ or `ls` results from consuming the context window immediately after
 compaction. Each result is capped at 12 KiB with deterministic head/tail
 evidence; an aggregate 64 KiB budget retains newest inspection results
 and replaces older bodies with rerunnable receipts. Complete tool
-results remain stored and visible. Configure
-`PI_CONTEXT_TOOL_RESULT_BYTES` (4096–51200) and
-`PI_CONTEXT_TOOL_RESULTS_TOTAL_BYTES` (16384–524288).
+results remain stored and visible. The retention window moves forward:
+old cached text must never prevent a fresh read from reaching the model.
+Eviction can invalidate a provider cache prefix; evidence correctness
+takes priority. Configure `PI_CONTEXT_TOOL_RESULT_BYTES` (4096–51200)
+and `PI_CONTEXT_TOOL_RESULTS_TOTAL_BYTES` (16384–524288).
 
 RLM model policy is ordered
 `openai-codex/gpt-5.6-luna < .../gpt-5.6-terra < .../gpt-5.6-sol` in
@@ -149,17 +153,38 @@ does not itself invalidate the provider’s system-prefix cache. Actual
 cache reuse remains provider-dependent. Workers cannot change their
 assigned model and report insufficiency when it is inadequate.
 
-Only one RLM run and one child model process are active at a time; at
-most four active/queued runs are retained. Additional background runs
-and recursive children queue. RLM starts detached by default, keeps the
-Pi session interactive, and emits one bounded completion wakeup; set
-`async=false` only for a short blocking call. This serialization is a
-hard safety boundary, not a tuning default.
+Within each Pi runtime, only one RLM run and one child model process are
+active at a time; at most four active/queued runs are retained.
+Additional RLM runs and recursive children queue. RLM starts detached by
+default; set `async=false` only for a short blocking call or
+`notifyOnCompletion=false` for silent polling. Prompts travel over stdin
+rather than OS-limited command-line arguments. JavaScript evaluation
+runs in a terminable worker with its deadline/abort control outside the
+worker, including code after `await`. Persisted run history is read-only
+on hydration: live foreign executors are not resumed or marked
+interrupted; a known dead owner may be shown as interrupted without
+rewriting its metadata.
 
 Long-running shell commands use `bg_run`: output stays in bounded
-external task files while Pi remains interactive, and completion emits
-one status/path wakeup. This avoids holding a foreground tool call open
-or repeatedly injecting CI progress into model context.
+external task files while Pi remains interactive. The manager is tracked
+under `vendor/pi-background-tasks` with upstream attribution and local
+regression tests, replacing the npm dependency/postinstall patch. Signal
+termination is a failure, never a zero exit.
+
+The `completions` extension is required alongside RLM/background tasks.
+Both publish session-scoped notices to it instead of queuing individual
+host follow-ups. Targeted terminal RLM `status`/`wait` responses and
+background status/log reads suppress the corresponding pending notice
+(listing RLM summaries alone does not consume final results);
+`/bg-clear` also clears pending wakes for the finished notices it
+clears. Unobserved notices are batched only when Pi is idle. Shutdown
+discards pending notices and unsubscribes the old session. This prevents
+already-consumed results from reappearing after a report; host
+submission is not a durable delivery guarantee. For completely silent
+shell polling, set both `notifyOnCompletion=false` and
+`triggerOnCompletion=false`. Updating repository files does not replace
+already-loaded extensions: update the installed package, then `/reload`
+after live tasks finish.
 
 ### Permanent memory
 

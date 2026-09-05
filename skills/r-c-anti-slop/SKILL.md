@@ -22,7 +22,7 @@ R rules, by exact trigger:
 - `r-duplicate-adjacent-guard`: two adjacent `if` statements with the same Tree-sitter expression, a known side-effect-free validation condition, and an earlier `stop()`/`return()` consequence.
 - `r-else-null`: `else NULL` where the `if` is a standalone expression in a braced body, so an absent alternative already yields `NULL`.
 - `r-redundant-else-after-termination`: an `else` on a standalone `if` whose true branch is exactly one `stop()` or `return()`; outdent the alternative after the terminating guard.
-- `r-identical-if-branches`: a known side-effect-free condition whose true and false branches have identical whitespace-normalized source; confirm that forcing the condition is not contractual before removing it.
+- `r-identical-if-branches`: a known side-effect-free condition whose true and false branches have identical parsed structure and token contents (including whitespace inside literals); confirm that forcing the condition is not contractual before removing it.
 - `r-private-helper-usage`: every top-level private `.name <- function(...)` together with its direct call-site count in the analysis scope; callbacks and `get()` remain dynamic and are not counted.
 - `r-single-use-predicate-helper`: a top-level, side-effect-free predicate helper with exactly one direct call from another assigned function in the analysis scope, regardless of whether its name starts with a dot.
 - `r-scalar-validator-helper`: a dedicated helper that hand-rolls scalar-string validation by composing `is.character()`, `length()`, `is.na()`, and `nzchar()` instead of placing a concise check at a real admission boundary.

@@ -19,6 +19,7 @@ interface PersistedRun {
   startedAt?: number;
   finishedAt?: number;
   status: RunStatus;
+  ownerPid?: number;
   input: StartRunInput;
   error?: string;
   result?: Pick<RlmRunResult, "backend" | "visualizerSession" | "stats">;
@@ -73,6 +74,7 @@ export class RunStore {
 
     const record: RunRecord = {
       id,
+      ownerPid: process.pid,
       createdAt: Date.now(),
       status: "queued",
       artifactsDir: path.join(this.runsRoot, id),
@@ -130,11 +132,16 @@ export class RunStore {
   async wait(id: string, timeoutMs: number): Promise<{ record: RunRecord; done: boolean }> {
     const record = this.mustGet(id);
     if (record.status !== "queued" && record.status !== "running") return { record, done: true };
-    const timed = await Promise.race([
-      record.promise.then(() => true).catch(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs)),
-    ]);
-    return { record, done: timed };
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const done = await Promise.race([
+        record.promise.then(() => true).catch(() => true),
+        new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+      ]);
+      return { record, done };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private dispatch(): void {
@@ -241,6 +248,7 @@ export class RunStore {
       startedAt: record.startedAt,
       finishedAt: record.finishedAt,
       status: record.status,
+      ownerPid: record.ownerPid,
       input: redactInlineContext(record.input),
       error: record.error,
       result: record.result
@@ -281,10 +289,15 @@ export class RunStore {
       try {
         const metadata = JSON.parse(fs.readFileSync(path.join(dir, "run.json"), "utf8")) as PersistedRun;
         if (metadata.version !== 1 || !metadata.id || !metadata.input) continue;
-        const status: RunStatus = metadata.status === "running" || metadata.status === "queued" ? "interrupted" : metadata.status;
+        const unfinished = metadata.status === "running" || metadata.status === "queued";
+        // A new observer does not own another runtime's executor. Legacy records
+        // without ownership cannot safely be pronounced dead either.
+        if (unfinished && (!metadata.ownerPid || processMayBeAlive(metadata.ownerPid))) continue;
+        const status: RunStatus = unfinished ? "interrupted" : metadata.status;
         const result = loadPersistedResult(metadata, dir);
         const record: RunRecord = {
           id: metadata.id,
+          ownerPid: metadata.ownerPid,
           createdAt: metadata.createdAt,
           startedAt: metadata.startedAt,
           finishedAt: metadata.finishedAt ?? (status === "interrupted" ? Date.now() : undefined),
@@ -297,7 +310,7 @@ export class RunStore {
           cancel: () => {},
         };
         this.runs.set(record.id, record);
-        if (status !== metadata.status) this.persist(record);
+        // Hydration is read-only; only the owning runtime writes run metadata.
       } catch {
         // Ignore incomplete artifacts from runs that died before metadata creation.
       }
@@ -332,6 +345,15 @@ function loadPersistedResult(metadata: PersistedRun, dir: string): RlmRunResult 
     };
   } catch {
     return undefined;
+  }
+}
+
+function processMayBeAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
   }
 }
 
