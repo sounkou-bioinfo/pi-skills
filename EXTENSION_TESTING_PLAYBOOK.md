@@ -1,8 +1,24 @@
 # Extension testing playbook
 
-Use with [the QA standard](EXTENSION_QA_STANDARD.md) and
-[the current coverage matrix](TEST_PLAN.md). Commands below run from the repository
-root, not from the vendored package.
+Consult this file for test commands, prerequisites, or harness design. Use
+[the QA standard](EXTENSION_QA_STANDARD.md) for changed contracts and
+[the coverage matrix](TEST_PLAN.md) for existing evidence and gaps. Commands run
+from the repository root, not from the vendored package.
+
+## Select checks for the change
+
+- **Prose:** link/package checks; render and check README only when its source changes.
+- **Skills/prompts:** review routing on matching and non-matching tasks, preserve
+  domain constraints, and check shipped references. Textual review is not proof
+  of a model's decisions; run affected prompt/host tests for injection changes.
+- **Runtime/build/package:** use affected tests while iterating, then
+  `npm run check` and required boundary gates before handoff.
+- **Release/compatibility:** also validate clean installed artifacts and claimed
+  host/platform combinations. Do not skip these because focused tests passed.
+
+Choose by behavior, not file suffix: changing executable documentation or a
+prompt is not a prose-only edit. Follow the applicable stronger gates for mixed
+changes; do not run every command below after every patch.
 
 ## Prerequisites and commands
 
@@ -18,7 +34,7 @@ root, not from the vendored package.
 
 ```sh
 npm install
-npm run check                  # typecheck, all current tests, README consistency
+npm run check                  # full local gate, not the default for each edit
 npm run test:background-tasks   # registry + fake-Pi tool integration, real shell jobs
 npm run test:completions        # queue and fake-Pi lifecycle
 npm run test:rlm                # worker, subprocess, store, and system-R regressions
@@ -27,10 +43,44 @@ npm run test:anti-slop          # tool adapter + native R/C analyzer fixtures
 npm run test:package            # doc links, declared assets, npm pack inventory
 ```
 
-After editing `README.Rmd`, run `npm run render:readme` before `npm run check`.
+After editing `README.Rmd`, run `npm run render:readme` and `npm run check:readme`.
 Other focused test commands are listed in [package.json](package.json).
 Run gates serially: existing TypeScript suites use fixed build directories and
 are not safe to run concurrently in the same checkout.
+
+## Optional fresh-Pi memory source smoke
+
+[The command fixture](extensions/memory/source-smoke.test.ts) checks actual tool
+registration/schema and source-loaded SQLite projection in a fresh Pi process.
+It does not invoke the tool through a model, test RPC, or install a tarball.
+Run the following Linux/Bash command in a background task after dependencies are
+provisioned. Keep the output until inspected; no real memory or agent settings
+are used and the slash command makes no model request.
+
+```bash
+set -euo pipefail
+root=$PWD
+probe=$(mktemp -d)
+(
+  cd "$probe"
+  env -i PATH="$PATH" HOME="$HOME" \
+    PI_CODING_AGENT_DIR="$probe/agent" PI_MEMORY_DB="$probe/memory.sqlite" \
+    PI_MEMORY_PROJECT=source-smoke GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CONFIG_GLOBAL="$probe/absent-git-config" timeout 120s pi \
+    --no-extensions --no-skills --no-prompt-templates --no-context-files \
+    --no-session --offline \
+    -e "$root/extensions/memory/index.ts" \
+    -e "$root/extensions/memory/source-smoke.test.ts" -p /memory-source-smoke
+) 2>&1 | tee "$probe/result.log"
+grep -q SOURCE_MEMORY_SMOKE_OK "$probe/result.log"
+```
+
+After inspecting the result, remove only that task's `$probe` directory. Do not
+add `--no-tools`: on Pi 0.85.1 it also removes the extension tool from discovery,
+which makes this registration assertion fail. `--offline` does not provision
+missing DuckDB artifacts; their warm-cache requirement still applies. The sandbox
+clears inherited provider keys and retains `HOME` only for the existing native
+artifact cache; Pi's agent/auth directory is separate.
 
 ## Choose the layer that can establish the claim
 

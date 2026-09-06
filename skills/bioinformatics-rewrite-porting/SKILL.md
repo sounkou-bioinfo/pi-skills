@@ -1,6 +1,6 @@
 ---
 name: bioinformatics-rewrite-porting
-description: Define and validate a compatible port of an existing bioinformatics tool. Use when behavior or output claims target a named upstream implementation.
+description: Use when implementing or validating compatibility with a named upstream bioinformatics tool.
 ---
 
 # Bioinformatics rewrite and porting

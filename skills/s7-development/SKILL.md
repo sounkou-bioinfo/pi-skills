@@ -1,6 +1,6 @@
 ---
 name: s7-development
-description: Implement or migrate R APIs with S7 classes, properties, validators, generics, multiple dispatch, inheritance, compatibility, and package registration.
+description: Use when implementing or changing R S7 classes, properties, methods, or package integration.
 ---
 
 # S7 development

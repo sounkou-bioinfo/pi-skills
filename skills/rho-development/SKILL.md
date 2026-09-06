@@ -1,13 +1,21 @@
 ---
 name: rho-development
-description: Work in RGenomicsETL/Rho on evidence-driven refinement, S7/s7contract interfaces, async tasks and streams, capabilities, providers, sessions, authored Rmd tests, and monorepo gates.
+description: Use for Rho implementation, package-boundary changes, or authored Rmd test workflows.
 ---
 
 # Rho development
 
 ## Architecture
 
-Read monorepo authorities first, per `AGENTS.md`'s contract table rather than guessing from package names: `docs/architecture.md` (package ownership), `docs/synthesis.md` (distinctions that currently survive executable pressure), `docs/refinements.md` (open contradictions and required evidence), `dev-notes/design/functional-oop.md` (S7 and `s7contract`), `dev-notes/design/async-effects.md` (tasks, streams, cancellation, placement), `dev-notes/design/provider-and-event-protocols.md` (providers, operations, events), `dev-notes/design/session-resource-topologies.md` (journals, resolvers, CAS, coordination, execution), and `docs/pi-parity.md` (verified Pi behavior only; `ROADMAP.md` is delivery order, not implementation status).
+Follow `AGENTS.md`'s contract table. Select documentation for the affected contract rather than reading the whole monorepo map:
+
+- package ownership: `docs/architecture.md`;
+- design refinement/evidence: `docs/synthesis.md` and the relevant contradiction in `docs/refinements.md`;
+- S7 / `s7contract`: `dev-notes/design/functional-oop.md`;
+- tasks, streams, cancellation, placement: `dev-notes/design/async-effects.md`;
+- providers, operations, events: `dev-notes/design/provider-and-event-protocols.md`;
+- session resources and execution: `dev-notes/design/session-resource-topologies.md`;
+- Pi compatibility claims: `docs/pi-parity.md`. `ROADMAP.md` is delivery order, not implementation status.
 
 Keep journal, resolver, content-addressed storage, coordination, and execution as distinct concepts. Add a shared abstraction only after two real consumers establish the invariant; update synthesis, refinement, and parity evidence together.
 
@@ -19,4 +27,4 @@ Provider, tool, event, and session protocols define ordering, ownership, cancell
 
 ## Package proof
 
-Authored `.Rmd` tests are authorities; purled/generated `.R` files are artifacts and must remain in sync. Run formatting/style, purl/generated-source checks, focused tests, monorepo tests, and tarball checks required by current Makefiles, including the specific targets `make check-parity`, `make check-secrets`, `make check-models`, `make check-purled-tests`, and (release/publication work only) `make public-ready`. Generic R package mechanics belong to `r-package-development`; this skill owns Rho's refinement, capability, S7, and async contracts.
+Authored `.Rmd` tests are authorities; purled/generated `.R` files are artifacts and must remain in sync. Use focused tests and affected generation checks while iterating. Before runtime/package handoff, run the current Makefiles' required monorepo/tarball gates, including applicable `make check-parity`, `make check-secrets`, `make check-models`, and `make check-purled-tests`; `make public-ready` is for release/publication work. Plain prose edits need relevant docs checks, but executable Rmd tests are not prose-only. Generic R package mechanics belong to `r-package-development`; this skill owns Rho's refinement, capability, S7, and async contracts.

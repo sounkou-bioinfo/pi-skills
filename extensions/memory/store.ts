@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -32,7 +33,13 @@ export type MemoryStatement = {
   graph?: string;
 };
 
+export const GLOBAL_GRAPH = "memory:shared";
+
+export type MemoryEvidence = { source?: string; revision?: string; runtime?: string };
+export type MemoryRecordedIn = { project: string; revision?: string; branch?: string; dirty?: boolean };
+
 export type MemorySnapshot = {
+  graph?: string;
   transactionId: number;
   transactionTime?: string;
 };
@@ -47,6 +54,7 @@ export type MemoryStatus = MemorySnapshot & {
 };
 
 export type SummaryTask = {
+  graph?: string;
   summary: string;
   rangeStart: number;
   rangeEnd: number;
@@ -67,6 +75,8 @@ export type WakeRow = {
   value?: string;
   transactionTime?: string;
   graph?: string;
+  evidence?: string;
+  recordedIn?: string;
   ready: boolean;
 };
 
@@ -155,15 +165,20 @@ export class MemoryDatabase {
     graph?: string;
     datatype?: string;
     language?: string;
+    evidence?: MemoryEvidence;
+    recordedIn?: MemoryRecordedIn;
   }): Promise<{ transactionId: number; stanza: string; task?: SummaryTask }> {
     const text = oneLine(input.text, "memory");
     const graph = label(input.graph ?? "memory:global", "graph", 200);
     if (graph === "memory:system") throw new Error("memory:system is reserved for derived summary statements");
     const predicate = label(input.predicate ?? "memory:note", "predicate", 200);
+    const evidence = input.evidence && Object.fromEntries((["source", "revision", "runtime"] as const)
+      .filter((key) => input.evidence![key] !== undefined)
+      .map((key) => [key, label(input.evidence![key]!, `evidence ${key}`, 500)]));
     return this.serial(async () => {
       let stanza = "";
-      const transactionId = await this.append("note", { graph, predicate }, async (tx) => {
-        stanza = `memory:note/${tx}`;
+      const transactionId = await this.append("note", { graph, predicate, evidence, recordedIn: input.recordedIn }, async (tx) => {
+        stanza = `${input.graph === undefined ? "memory:note" : "memory:scoped-note"}/${tx}`;
         return [{
           stanza,
           subject: label(input.subject ?? stanza, "subject", 300),
@@ -174,22 +189,30 @@ export class MemoryDatabase {
           graph,
         }];
       });
-      await this.setContextOn(this.connection, undefined, DEFAULT_LINE_BUDGET);
+      await this.setContextOn(this.connection, undefined, DEFAULT_LINE_BUDGET, input.graph);
       return { transactionId, stanza, task: await this.summaryTaskOn(this.connection) };
     });
   }
 
-  async wake(asOf?: string | number, lineBudget = DEFAULT_LINE_BUDGET): Promise<{ snapshot: MemorySnapshot; rows: WakeRow[]; ready: boolean }> {
+  async wake(asOf?: string | number, lineBudget = DEFAULT_LINE_BUDGET, graph?: string): Promise<{ snapshot: MemorySnapshot; rows: WakeRow[]; ready: boolean }> {
     return this.serial(async () => {
-      const snapshot = await this.setContextOn(this.connection, asOf, boundedInteger(lineBudget, 1, 500, "line budget"));
+      const snapshot = await this.setContextOn(this.connection, asOf, boundedInteger(lineBudget, 1, 500, "line budget"), graph);
       const result = (await rows(this.connection, operations.wake)).map(toWakeRow);
       return { snapshot, rows: result, ready: result.every((row) => row.ready) };
     });
   }
 
-  async status(asOf?: string | number): Promise<MemoryStatus> {
+  async current(asOf?: string | number, limit = 4, graph?: string): Promise<{ snapshot: MemorySnapshot; rows: Row[] }> {
+    const rowLimit = boundedInteger(limit, 1, MAX_ROWS, "current note limit");
     return this.serial(async () => {
-      const snapshot = await this.setContextOn(this.connection, asOf, DEFAULT_LINE_BUDGET);
+      const snapshot = await this.setContextOn(this.connection, asOf, DEFAULT_LINE_BUDGET, graph);
+      return { snapshot, rows: (await rows(this.connection, operations.current_notes, [rowLimit])).map(jsonSafeRow) };
+    });
+  }
+
+  async status(asOf?: string | number, graph?: string): Promise<MemoryStatus> {
+    return this.serial(async () => {
+      const snapshot = await this.setContextOn(this.connection, asOf, DEFAULT_LINE_BUDGET, graph);
       const result = await one(this.connection, operations.status);
       if (!result) throw new Error("Memory status query returned no row");
       return {
@@ -204,22 +227,22 @@ export class MemoryDatabase {
     });
   }
 
-  async summaryTask(): Promise<SummaryTask | undefined> {
+  async summaryTask(graph?: string): Promise<SummaryTask | undefined> {
     return this.serial(async () => {
-      await this.setContextOn(this.connection, undefined, DEFAULT_LINE_BUDGET);
+      await this.setContextOn(this.connection, undefined, DEFAULT_LINE_BUDGET, graph);
       return this.summaryTaskOn(this.connection);
     });
   }
 
-  async saveSummary(input: { summary: string; text: string; sourceHash: string }): Promise<{ transactionId: number; remaining: number }> {
+  async saveSummary(input: { summary: string; text: string; sourceHash: string; graph?: string }): Promise<{ transactionId: number; remaining: number }> {
     const text = oneLine(input.text, "summary");
     const summary = label(input.summary, "summary subject", 300);
     const sourceHash = input.sourceHash.trim();
     if (!/^[a-f0-9]{64}$/.test(sourceHash)) throw new Error("source_hash must be the hash returned by memory nap");
 
     return this.serial(async () => {
-      const transactionId = await this.append("summary", { summary, source_hash: sourceHash }, async () => {
-        await this.setContextOn(this.connection, undefined, DEFAULT_LINE_BUDGET);
+      const transactionId = await this.append("summary", { summary, source_hash: sourceHash, graph: input.graph }, async () => {
+        await this.setContextOn(this.connection, undefined, DEFAULT_LINE_BUDGET, input.graph);
         const task = await this.summaryTaskOn(this.connection);
         if (!task) throw new Error("Nothing is pending compression");
         if (task.summary !== summary) throw new Error(`${summary} is not next; next is ${task.summary}`);
@@ -240,23 +263,24 @@ export class MemoryDatabase {
           statement("memory:sourceHash", sourceHash, undefined, "xsd:string"),
           statement("memory:status", "active", undefined, "xsd:string"),
         ];
+        if (task.graph !== undefined) result.push(statement("memory:scope", task.graph));
         if (task.leftSummary) result.push(statement("memory:left", undefined, task.leftSummary));
         if (task.rightSummary) result.push(statement("memory:right", undefined, task.rightSummary));
         return result;
       });
-      await this.setContextOn(this.connection, undefined, DEFAULT_LINE_BUDGET);
+      await this.setContextOn(this.connection, undefined, DEFAULT_LINE_BUDGET, input.graph);
       const task = await this.summaryTaskOn(this.connection);
       return { transactionId, remaining: task?.remaining ?? 0 };
     });
   }
 
-  async forget(summary: string, reason = "summary rejected"): Promise<{ transactionId: number; invalidated: number }> {
+  async forget(summary: string, reason = "summary rejected", graph?: string): Promise<{ transactionId: number; invalidated: number }> {
     const subject = label(summary, "summary subject", 300);
     const cleanReason = oneLine(reason, "reason");
     return this.serial(async () => {
       let invalidated = 0;
-      const transactionId = await this.append("forget", { summary: subject, reason: cleanReason }, async () => {
-        await this.setContextOn(this.connection, undefined, DEFAULT_LINE_BUDGET);
+      const transactionId = await this.append("forget", { summary: subject, reason: cleanReason, graph }, async () => {
+        await this.setContextOn(this.connection, undefined, DEFAULT_LINE_BUDGET, graph);
         const target = await one(this.connection, operations.summary_target, [subject]);
         if (!target) throw new Error(`No active summary ${subject}`);
         const ancestors = await rows(this.connection, operations.summary_ancestors, [subject]);
@@ -270,37 +294,37 @@ export class MemoryDatabase {
           graph: "memory:system",
         }));
       });
-      await this.setContextOn(this.connection, undefined, DEFAULT_LINE_BUDGET);
+      await this.setContextOn(this.connection, undefined, DEFAULT_LINE_BUDGET, graph);
       return { transactionId, invalidated };
     });
   }
 
-  async zoom(summary: string, asOf?: string | number): Promise<{ snapshot: MemorySnapshot; rows: WakeRow[] }> {
+  async zoom(summary: string, asOf?: string | number, graph?: string): Promise<{ snapshot: MemorySnapshot; rows: WakeRow[] }> {
     const subject = label(summary, "summary subject", 300);
     return this.serial(async () => {
-      const snapshot = await this.setContextOn(this.connection, asOf, DEFAULT_LINE_BUDGET);
+      const snapshot = await this.setContextOn(this.connection, asOf, DEFAULT_LINE_BUDGET, graph);
       const result = (await rows(this.connection, operations.zoom, [subject])).map(toWakeRow);
       if (result.length === 0) throw new Error(`Unknown summary block ${subject} at transaction ${snapshot.transactionId}`);
       return { snapshot, rows: result };
     });
   }
 
-  async recall(query: string, asOf?: string | number, limit = 30): Promise<{ snapshot: MemorySnapshot; rows: Row[]; truncated: boolean }> {
+  async recall(query: string, asOf?: string | number, limit = 30, graph?: string, currentOnly = false): Promise<{ snapshot: MemorySnapshot; rows: Row[]; truncated: boolean }> {
     const search = query.trim();
     if (!search) throw new Error("recall query must not be empty");
     const rowLimit = boundedInteger(limit, 1, MAX_ROWS, "recall limit");
     return this.serial(async () => {
-      const snapshot = await this.setContextOn(this.connection, asOf, DEFAULT_LINE_BUDGET);
+      const snapshot = await this.setContextOn(this.connection, asOf, DEFAULT_LINE_BUDGET, graph);
       const watermarkRow = await one(this.connection, operations.fts_watermark, [snapshot.transactionId]);
       const watermark = integer(watermarkRow?.transaction_id ?? 0);
       if (watermark === 0) return { snapshot, rows: [], truncated: false };
       await this.refreshFts(watermark, snapshot.transactionId);
-      const result = (await rows(this.connection, operations.fts_recall, [search, rowLimit + 1])).map(jsonSafeRow);
+      const result = (await rows(this.connection, operations.fts_recall, [search, currentOnly, rowLimit + 1])).map(jsonSafeRow);
       return { snapshot, rows: result.slice(0, rowLimit), truncated: result.length > rowLimit };
     });
   }
 
-  async semanticSql(query: string, asOf?: string | number, limit = 100): Promise<{ snapshot: MemorySnapshot; rows: Row[]; truncated: boolean }> {
+  async semanticSql(query: string, asOf?: string | number, limit = 100, graph?: string): Promise<{ snapshot: MemorySnapshot; rows: Row[]; truncated: boolean }> {
     const sql = query.trim().replace(/;\s*$/, "");
     if (!/^(select|with)\b/i.test(sql)) throw new Error("memory SQL must be a read-only SELECT or WITH query");
     if (Buffer.byteLength(sql, "utf8") > MAX_SQL_BYTES) throw new Error(`memory SQL exceeds ${MAX_SQL_BYTES} UTF-8 bytes`);
@@ -316,7 +340,7 @@ export class MemoryDatabase {
         await connection.run("SET threads = 1");
         await connection.run("SET memory_limit = '256MB'");
         await connection.run("SET lock_configuration = true");
-        const snapshot = await this.setContextOn(connection, asOf, DEFAULT_LINE_BUDGET);
+        const snapshot = await this.setContextOn(connection, asOf, DEFAULT_LINE_BUDGET, graph);
         const timer = setTimeout(() => connection.interrupt(), SEMANTIC_SQL_TIMEOUT_MS);
         timer.unref();
         try {
@@ -337,6 +361,7 @@ export class MemoryDatabase {
     if (!task) return undefined;
     const source = await rows(connection, operations.next_summary_source);
     return {
+      graph: optionalString(task.graph),
       summary: String(task.summary),
       rangeStart: integer(task.range_start),
       rangeEnd: integer(task.range_end),
@@ -417,7 +442,9 @@ export class MemoryDatabase {
     }
   }
 
-  private async setContextOn(connection: DuckDBConnection, asOf?: string | number, lineBudget = DEFAULT_LINE_BUDGET): Promise<MemorySnapshot> {
+  private async setContextOn(connection: DuckDBConnection, asOf?: string | number, lineBudget = DEFAULT_LINE_BUDGET, graph?: string): Promise<MemorySnapshot> {
+    if (graph !== undefined) graph = label(graph, "graph", 200);
+    const prefix = graph === undefined ? "memory:summary/" : `memory:scoped-summary/${createHash("sha256").update(graph).digest("hex")}/`;
     const latestRow = await one(connection, operations.latest_transaction);
     const latest = integer(latestRow?.transaction_id ?? 0);
     let transactionId: number;
@@ -434,10 +461,10 @@ export class MemoryDatabase {
       const row = await one(connection, operations.transaction_at_time, [timestamp.toISOString()]);
       transactionId = integer(row?.transaction_id ?? 0);
     }
-    await connection.run(operations.set_query_context, [transactionId, lineBudget]);
-    if (transactionId === 0) return { transactionId: 0 };
+    await connection.run(operations.set_query_context, [transactionId, lineBudget, graph ?? null, prefix]);
+    if (transactionId === 0) return { transactionId: 0, graph };
     const receipt = await one(connection, operations.transaction_receipt, [transactionId]);
-    return { transactionId, transactionTime: receipt ? String(receipt.transaction_time) : undefined };
+    return { transactionId, transactionTime: receipt ? String(receipt.transaction_time) : undefined, graph };
   }
 
   private async refreshFts(watermark: number, asOfTransaction: number): Promise<void> {
@@ -592,6 +619,8 @@ function toWakeRow(row: Row): WakeRow {
     value: optionalString(row.value),
     transactionTime: optionalString(row.transaction_time),
     graph: optionalString(row.graph),
+    evidence: optionalString(row.evidence),
+    recordedIn: optionalString(row.recorded_in),
     ready: Boolean(row.ready),
   };
 }

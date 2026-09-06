@@ -1,6 +1,6 @@
 ---
 name: duckhts-wasm-debugging
-description: Debug DuckHTS in webR, browser workers, Emscripten, or duckdb-wasm. Use when the failing artifact or runtime is wasm rather than native host DuckDB/R.
+description: Use when debugging DuckHTS in webR, duckdb-wasm, or Emscripten/browser workers.
 ---
 
 # DuckHTS wasm debugging

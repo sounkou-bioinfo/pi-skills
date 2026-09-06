@@ -1,6 +1,6 @@
 ---
 name: bioinformatics-ffi-and-bindings
-description: Design bindings around mature native bioinformatics libraries. Use when exposing a C/C++ core to R, Python, SQL, wasm, or an embedded runtime instead of rewriting it.
+description: Use when exposing a native bioinformatics library through another language or runtime.
 ---
 
 # Bioinformatics FFI and bindings
@@ -20,7 +20,7 @@ Reuse a stable native core and make the language boundary explicit.
 
 ## Validation
 
-Test the native oracle and every public wrapper separately:
+For changes to native or wrapper contracts, test the affected native and host surfaces separately:
 
 1. scalar/edge/error cases against the native or upstream oracle;
 2. lifetime tests for close, finalization, repeated load/unload, and callbacks;

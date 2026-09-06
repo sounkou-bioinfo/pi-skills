@@ -1,23 +1,15 @@
 ---
 name: sounkou-engineering-style
-description: Apply shared sounkou-bioinfo/RGenomicsETL engineering rules. Use when the user asks for “our style” or when a project skill delegates authority, ownership, bounds, focused work, and proof here.
+description: Use when the user requests our engineering style or a project skill delegates shared R/C/DuckDB rules here.
 ---
 
 # Sounkou engineering style
 
 ## Control the concept
 
-Read repository authorities before editing. Keep one conceptual controller; do not multiply agents, branches, worktrees, plans, validators, helpers, or interfaces to simulate progress.
+Follow applicable repository instructions; consult other authorities for the contract being changed, not as a mandatory reading stack. Keep one conceptual controller; do not multiply agents, branches, worktrees, plans, validators, helpers, or interfaces to simulate progress.
 
-For each change, identify:
-
-- the single semantic authority;
-- the invariant and its owner;
-- the public boundary affected;
-- the smallest executable proof;
-- obsolete code/docs the new authority replaces.
-
-Use evidence dialectically: state a model, seek a counterexample, revise the model, and encode the resolution in code/tests rather than permanent planning prose.
+For design/runtime changes, identify the invariant, its owner, its public boundary, and an executable counterexample or proof. Encode the resolution in code/tests rather than permanent planning prose. A typo fix does not need a formal design narrative.
 
 ## Code
 
@@ -31,9 +23,11 @@ Name the concrete axis instead of saying only “boundary”: allocation limit, 
 
 ## Completion
 
-Inspect the final diff and actual artifacts. Run focused tests, then repository gates. Map every requested deliverable to evidence. Do not claim performance, compatibility, portability, or completion beyond the measured/tested workload. Remove superseded plans, duplicate authorities, and generated debris.
+Inspect the changed diff/artifacts. Use affected tests during development and complete the gates required by the changed contract before handoff; prose-only edits need relevant render/link checks. Do not rerun unaffected suites after every edit. Report completion, performance, compatibility, and portability only to the extent verified. Remove superseded authorities and task-owned generated debris, not unrelated work.
 
 ## Review questions
+
+Use the relevant questions for design, ownership, or safety reviews; they are not a required response template.
 
 - What is the one authority for this decision?
 - Which contradiction forced this abstraction?

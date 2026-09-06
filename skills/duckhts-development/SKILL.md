@@ -1,13 +1,13 @@
 ---
 name: duckhts-development
-description: Work in RGenomicsETL/duckhts across the C extension, Rduckhts, tests, docs, vendoring, benchmarks, and compatible upstream rewrites. Use for any DuckHTS implementation change.
+description: Use for DuckHTS implementation, build, or public SQL/R API changes.
 ---
 
 # DuckHTS development
 
 ## Authorities
 
-Read repository `AGENTS.md`, `ARCHITECTURE.md`, `STYLE.md`, `design/README.md`, and relevant source/tests before editing. Repository instructions win over this skill.
+Follow repository `AGENTS.md`; repository instructions win over this skill. Consult `ARCHITECTURE.md` for component boundaries, `STYLE.md` for code conventions, and the relevant entry in `design/README.md` for design changes—not the whole stack for every edit.
 
 - `functions.yaml` is the only hand-maintained public SQL catalog.
 - Extension source is under `src/`; R package integration is under `r/Rduckhts/`.
@@ -18,7 +18,7 @@ Read repository `AGENTS.md`, `ARCHITECTURE.md`, `STYLE.md`, `design/README.md`, 
 
 Every user-visible change updates root `NEWS.md`; update `r/Rduckhts/NEWS.md` only for package-visible changes. Public features normally need SQL conformance and R tinytests.
 
-After extension-source changes:
+Use affected tests while iterating. Before handing off extension-source changes, run the repository's integration gates, including:
 
 ```bash
 cd /root/duckhts/r/Rduckhts

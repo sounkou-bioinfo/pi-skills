@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Scope memory writes, current-slot/FTS retrieval, semantic views and summary forests by project or explicit global graph. Add Git/override identity, separate recorded checkout from declared evidence, and bound combined current context to eight records/12 KiB. Preserve v1 history and identifiers without relabeling it; legacy retrieval is explicit and read-only in the tool.
+- Add a task-conditional project-orientation skill for recovering decisions, testing consequential contradictions and retaining learned distinctions without mandatory repository tours or automatic instruction-file promotion.
+
+- Make instruction lookup and verification task-conditional instead of requiring a document stack and full suite for every edit. Clarify local follow-through and permission boundaries without weakening runtime/release gates.
+- Narrow skill descriptions, scope project authority/gate guidance, and move detailed audit rules and GWAS enumeration into routed references. Preserve domain invariants and add explicit instruction-review cases; no model-specific effectiveness claim.
 - Add a repository QA standard, testing playbook, and evidence-linked coverage matrix with explicit SDK/RPC/PTY/agent-loop gaps. Add package/doc checks to `npm test` and a serial `npm run check` gate.
 - Shorten the README to installation, capabilities, and development links; move runtime details to `docs/operations.md`. Label vendored QA and publishing claims as upstream history, not local coverage.
 - Repair six reproduced correctness failures: isolate RLM JavaScript in a terminable worker; prioritize fresh inspection evidence; classify signal-killed jobs as failures; keep RunStore hydration read-only and ownership-aware; send large prompts over stdin; compare anti-slop AST structure and literal tokens without stripping string contents.

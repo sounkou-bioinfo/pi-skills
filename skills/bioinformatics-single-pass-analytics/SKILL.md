@@ -1,6 +1,6 @@
 ---
 name: bioinformatics-single-pass-analytics
-description: Design fused bioinformatics scans that compute several validated outputs from one parse/decompression pass. Use when repeated I/O dominates and metrics share real data locality.
+description: Use when combining bioinformatics metrics into one parse/decompression pass.
 ---
 
 # Bioinformatics single-pass analytics

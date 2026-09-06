@@ -1,6 +1,6 @@
 ---
 name: duckdb-c-extension-architecture
-description: Design and harden C DuckDB extensions across ownership, concurrency, API stability, vendoring, catalogs, and tests. Use for extension architecture or cross-cutting native changes, not a one-line patch.
+description: Use for C DuckDB extension architecture, ownership, concurrency, or API-compatibility changes.
 ---
 
 # DuckDB C extension architecture
@@ -9,11 +9,7 @@ This is the generic authority for C-extension architecture, API policy, vendorin
 
 ## Layers and ownership
 
-Keep three layers:
-
-1. public SQL registration/bind/execute adapters;
-2. reusable runtime and kernels;
-3. narrow DuckDB/upstream compatibility adapters.
+Separate public SQL registration/bind/execute policy, reusable kernels, and necessary DuckDB/upstream compatibility shims. Introduce a layer only when it owns a distinct responsibility, not to fill an architectural template.
 
 Name the owner and destruction point for database, connection, function, bind, global, local, thread, iterator, callback, and external-service state. Registration creates immutable metadata; execution state is scoped to the invocation or worker. Design shutdown and partial-initialization cleanup before adding background work.
 
@@ -36,6 +32,8 @@ Pin upstream versions/commits and checksums. Vendor through deterministic script
 When multiple surfaces can drift, keep one machine-readable catalog for names, kinds, signatures, returns, aliases, descriptions, examples, and lifecycle metadata. Generate docs/wrappers/descriptors and fail CI on drift. Examples must be short and executable.
 
 ## Validation
+
+Select checks for the changed contract; release and compatibility claims still require their full supported-surface evidence.
 
 - SQL conformance for public semantics and failure paths.
 - Native/property/sanitizer tests for kernels, ownership, and bounds.

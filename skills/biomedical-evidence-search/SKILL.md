@@ -1,89 +1,38 @@
 ---
 name: biomedical-evidence-search
-description: Search biomedical evidence resources through one bounded tool, including GWAS Catalog, Open Targets, gpmap/gpmapr, OmicsPred, Europe PMC, LitVar2, Ensembl, GTEx, FinnGen, and PheWeb. Use for variant, gene, trait, study, score, PheWAS, eQTL, or literature lookups.
+description: Use for variant, gene, trait, eQTL/PheWAS, score, or literature lookups via biomedical_search.
 ---
 
 # Biomedical evidence search
 
-## One routing authority
+Use the single `biomedical_search` tool, not a new per-provider skill or client.
+`list` discovers providers; `describe` gives a provider's current operations and
+arguments; `call` runs 1–12 fixed read-only operations. Describe unfamiliar
+contracts instead of guessing names. Reuse an already-observed contract within
+the task rather than rediscovering it before every call.
 
-Use the single `biomedical_search` tool. Do not create another provider-specific skill, extension, HTTP helper, or response schema for each new source.
+Resolve identifiers and assembly before coordinate queries. Batch independent
+calls when useful; bound pagination with `max_pages` (1–20). Partial failures and
+page/byte limits must remain visible. Profiles are routing metadata, not a
+network sandbox; the host's network policy remains authoritative.
 
-The tool has three actions:
+## Load the reference for the question
 
-1. `list` discovers admitted providers and their status;
-2. `describe` returns one provider's operations, required/default arguments, documentation, pagination, and limitations;
-3. `call` executes 1–12 fixed read-only operations and returns raw upstream payloads with source URLs.
+- Source selection, provider-specific semantics, or ontology-wide GWAS SNP
+  enumeration: [provider contracts](references/resources.md). For enumeration,
+  claim "all" only when `complete=true`; otherwise report the retrieved extent.
+- gpmapr uploads or archive/TSV workflows: [R package guide](references/gpmapr.md).
+  The search tool itself is read-only.
+- Imported-client compatibility or provenance: [upstream port](references/upstream-port.md).
 
-```json
-{"action":"list"}
-```
+## Evidence contract
 
-```json
-{"action":"describe","provider":"europe_pmc"}
-```
+Summarize returned payloads with provider/operation, arguments, identifiers and
+assembly, pagination extent, source URLs, limitations, and failed calls. Do not
+force heterogeneous scores, p-values, effect directions, or evidence classes into
+a common schema. Abstain where missing evidence would require guessing.
 
-```json
-{
-  "action": "call",
-  "requests": [
-    {"provider":"ensembl","operation":"variation","arguments":{"rsid":"rs3798220"}},
-    {"provider":"gtex_v8","operation":"eqtls","arguments":{"chr":"6","pos":160540105,"ref":"T","alt":"C"}}
-  ]
-}
-```
-
-Provider profiles are the semantic authority for endpoint mapping, method, argument-to-path/query mapping, pagination, and known limitations. The shared HTTP client owns timeout, JSON admission, bounded responses, source receipts, per-origin serialization, minimum request spacing, `Retry-After`, and capped exponential backoff for 429/502/503/504 responses. Profiles are routing metadata, not a network sandbox: the host's fetch/network policy is authoritative and may allow or restrict access. This follows pi-bio-agent's resource-profile approach without duplicating its manifest/ledger substrate.
-
-## Routing workflow
-
-1. Identify the question axis: canonical entity, curated GWAS association, integrated target evidence, genotype–phenotype map, molecular score, PheWAS/eQTL, or literature.
-2. Call `list` or `describe` instead of guessing operation names.
-3. Resolve identifiers and assembly before coordinate-based fan-out. Preserve rsIDs and canonical IDs exactly.
-4. Batch independent admitted calls in one `call`; partial provider failures remain explicit per-provider results.
-5. Follow pages only when needed and bound `max_pages` (1–20).
-6. Summarize only returned payloads. Report provider, operation, arguments, pages, limitations, and source URLs.
-
-Raw upstream JSON is retained deliberately. Do not normalize heterogeneous association scores, p-values, beta directions, evidence classes, or identifiers into a false common schema.
-
-## Resource choice
-
-- **GWAS Catalog v2:** literature-curated top associations, studies, variants, traits, publications, genes, and ancestries. `describe` lists the live OpenAPI filters and the tool rejects unsupported names rather than accepting silently ignored parameters. Use the current `show_child_trait` filter explicitly, and use `extended_geneset` only when reproducing legacy gene behavior.
-- **Open Targets v4:** cross-entity search, variant annotations, and credible-set context. An integrated association score is not a GWAS Catalog record or a clinical recommendation.
-- **gpmap/gpmapr:** genotype–phenotype map traits, genes, regions, variants, LD, pleiotropy, and uploaded GWAS metadata. Use the R package for uploads and archive/TSV workflows.
-- **OmicsPred:** molecular prediction scores, performance, PheWAS, cohorts, platforms, datasets, publications, and molecular entities. Its OpenAPI schema is the field/parameter authority.
-- **Europe PMC:** general biomedical literature search with cursor pagination.
-- **LitVar2:** variant metadata and publication identifiers. Public API responses do **not** expose the evidence snippets shown in the web interface.
-- **Ensembl:** rsID mappings and VEP annotations.
-- **GTEx/FinnGen/PheWeb:** source-specific eQTL/PheWAS lookups with explicit assembly conventions.
-- **eQTL Catalogue v3:** retained only as a retired port; the live endpoint returns HTTP 410, so use current data-access downloads.
-
-Load [references/resources.md](references/resources.md) for provider-specific contracts and [references/gpmapr.md](references/gpmapr.md) for R package workflows. Load [references/upstream-port.md](references/upstream-port.md) only when checking compatibility or provenance for imported client behavior.
-
-## Exhaustive GWAS SNP workflow
-
-For a broad ontology category such as infection-related traits:
-
-1. Resolve the intended parent term with `gwas_catalog/efo_traits` using supported fields such as `efo_trait` or `efo_id`; do not use guessed `search`, `query`, `trait`, or URI parameter names.
-2. Call `gwas_catalog/association_snps` with the resolved `efo_id`, `show_child_trait=true`, `size` up to 500, and a deliberate `max_pages`. Put `max_pages` inside that request or at the top level as the default for every request in the call.
-3. Use the compact result's `association_total`, `associations_retrieved`, and `complete` fields. Claim "all" only when `complete=true`; otherwise report the exact page/byte bound.
-4. The result deduplicates rsIDs and retains mapped ontology trait labels. Associations without an rsID are counted separately.
-
-This operation is a generic association projection, not an infection-specific workflow. Raw `associations` remains available when full association metadata is required. GWAS ontology expansion can be expensive, so the provider uses a 120-second request timeout while retaining per-origin request spacing and bounded retries.
-
-## Literature and snippet boundary
-
-Use Europe PMC for literature discovery and LitVar2 for variant-to-publication indexing. LitVar2's documented API can return variant summaries, autocomplete results, PMIDs/PMCIDs, sensor links, and variants for a gene. It cannot substantiate a quote or snippet because those snippets are available only through the LitVar2 web interface. Link the returned sensor/web page and state that a human-visible snippet requires web-interface inspection; never fabricate or attribute a snippet to the API.
-
-## Answer contract
-
-Return concise result rows plus:
-
-- provider and operation;
-- exact identifiers/coordinates and assembly;
-- pagination extent;
-- source and documentation URLs;
-- provider limitations, retired/development status, and failed calls;
-- an abstention where missing evidence would otherwise require guessing.
-
-For clinical or high-stakes interpretations, API evidence supports retrieval, not diagnosis or treatment advice.
+Europe PMC supports literature discovery; LitVar2 indexes variant publications.
+LitVar2 API results do **not** substantiate web-interface snippets or quotations.
+Inspect the actual page before attributing a snippet, and identify that source.
+API evidence supports retrieval, not clinical diagnosis or treatment advice.

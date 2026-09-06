@@ -1,19 +1,13 @@
 ---
 name: genomics-sql-rewrites
-description: Decompose genomics tools into DuckDB readers, native kernels, indexes, and composable SQL. Use for generic SQL-native architecture rather than a repository-specific workflow.
+description: Use when designing a genomics tool around DuckDB readers, native kernels, and composable SQL.
 ---
 
 # Genomics SQL rewrites
 
 ## Architecture
 
-Prefer queryable primitives over a monolithic command:
-
-1. projection-aware readers and index access;
-2. reusable native kernels;
-3. explicit state/reduction mechanics;
-4. SQL joins, grouping, provenance, and orchestration;
-5. optional compatibility outputs.
+Keep parsing/native semantics distinct from SQL orchestration and compatibility output policy. Add a reader, index, or kernel only when the workload needs it; an ordinary SQL query does not need a new native layer.
 
 Choose the execution model early. Per-thread mutable readers/iterators are the default; batch claiming, contig traversal, ordered emission, and reduction must match the workload. Preserve streaming, projection, filter, and `LIMIT` behavior where the source permits it.
 

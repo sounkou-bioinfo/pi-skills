@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import antiSlopExtension from "./index.js";
 
@@ -58,6 +59,10 @@ test("forwards an explicit Jarl request to the vendored analyzer", async () => {
     assert.deepEqual(result.details, { path: "/repo/R/example.R", language: "r", jarl: true });
     assert.equal(calls.length, 1);
     assert.equal(calls[0]?.command, "Rscript");
+    assert.equal(
+      calls[0]?.args[0],
+      fileURLToPath(new URL("../../skills/r-c-anti-slop/scripts/anti_slop.R", import.meta.url)),
+    );
     assert.deepEqual(calls[0]?.args.slice(-4), ["12", "--jarl", "/opt/jarl", "/repo/R/example.R"]);
 
     assert.ok(command);

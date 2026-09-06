@@ -1,13 +1,13 @@
 ---
 name: rfmalloc-development
-description: Work in the Rfmalloc monorepo on typed out-of-core storage, C-callable contracts, backend fallback, GGML vendoring, architecture programs, numerical oracles, cross-package checks, and GPU evidence.
+description: Use for implementation, build, or cross-package contract changes in the Rfmalloc monorepo.
 ---
 
 # Rfmalloc development
 
 ## Package ownership
 
-Read monorepo authorities and identify the owning package before editing. Keep storage/readers, codecs, compute backends, model/runtime orchestration, and statistical consumers separate. A cross-package contract change updates every affected `inst/include` declaration, implementation, registration, and consumer test.
+Follow monorepo instructions and identify the package owning the change; consult architecture documents when ownership or cross-package contracts are affected. Keep storage/readers, codecs, compute backends, model/runtime orchestration, and statistical consumers separate. A cross-package contract change updates every affected `inst/include` declaration, implementation, registration, and consumer test.
 
 Current package ownership:
 
@@ -32,4 +32,4 @@ Do not re-vendor the same engine or parser in sibling packages.
 
 ## Completion
 
-Run focused package tests, affected reverse/cross-package tests, generated-source checks, and tarball `R CMD check` for each changed package. Remove failed benchmark artifacts. Generic R package workflow belongs to `r-package-development`.
+Use focused package tests while iterating. Before runtime/build/package handoff, run required generated-source and tarball checks for changed packages, plus affected reverse/cross-package tests. Prose-only edits need relevant documentation checks; GPU claims still require the real rig evidence above. Clean only task-owned disposable artifacts and retain failure evidence needed for reproduction. Generic R package workflow belongs to `r-package-development`.

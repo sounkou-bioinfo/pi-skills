@@ -80,13 +80,16 @@ In `r_eval`, helpers include `install_r_packages()`, `context_load()`,
 Memory's append-only SQLite authority defaults to `~/.pi/agent/memory.sqlite`;
 `PI_MEMORY_DB` overrides it. SQLite WAL supports concurrent writers. DuckDB supplies
 semantic/as-of views and an FTS projection; SQLite remains authoritative.
-`note`, `recall`, `wake`, `zoom`, `nap`, and read-only `sql` expose those operations.
-Memory updates append versions, rather than overwrite prior facts. Complete
-requested summary compression before unrelated work.
+The tool resolves a project graph; `PI_MEMORY_PROJECT` overrides Git-derived
+identity. `global` is explicit cross-project knowledge and `legacy` is read-only
+v1 history. Scope applies to retrieval and compression, not just note labels.
+No old history is rewritten. See [project memory](memory.md) for identity rules,
+current versus historical queries, applicability, SQL boundaries and rollout.
 
-A bounded memory projection is inserted near the current user message and frozen
-through its tool loop; it is not persisted as another user message. `/goals`
-creates an explicit objective and continuation policy. The stored token budget is
+Automatic global/project context shares eight-record and 12 KiB budgets. It stays
+frozen through the same project's tool loop, refreshing on a new turn or project
+switch; it is not persisted as another user message. `/goals` creates an explicit
+objective and continuation policy. The stored token budget is
 not an enforced cumulative spending cap; do not use it as a billing limit.
 
 The semantic views follow [INCATools Semantic-SQL](https://github.com/INCATools/semantic-sql).

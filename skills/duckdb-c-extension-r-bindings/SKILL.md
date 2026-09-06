@@ -1,6 +1,6 @@
 ---
 name: duckdb-c-extension-r-bindings
-description: Package a DuckDB C extension for R. Use when installed artifacts, bootstrap/configure, SQL wrappers, generated docs, CRAN behavior, or native-versus-R ownership is central.
+description: Use for packaging or exposing a DuckDB C extension through an R package.
 ---
 
 # DuckDB C extension R bindings
@@ -21,6 +21,8 @@ Use an explicit reproducible bootstrap/configure path suitable for source packag
 Record extension version, DuckDB ABI/version, platform, source receipt, and artifact location. Fail before `LOAD` when the required artifact/capability is unavailable.
 
 ## Documentation and tests
+
+Apply these to the affected wrapper, build, or release surface; prose-only edits do not require unrelated native checks.
 
 - Keep authored R documentation distinct from generated function-catalog fragments.
 - Test wrapper validation and defaults independently from SQL conformance.

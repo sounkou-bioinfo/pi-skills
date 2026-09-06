@@ -30,7 +30,7 @@ configuration](docs/operations.md).
 |-------------------------------------------------------|------------------------------------------------------------------------------------------------------|
 | Background shell tasks and task dock                  | `bg_run`, `bg_status`, `bg_logs`, `bg_kill`; [manager](vendor/pi-background-tasks/UPSTREAM.md)       |
 | Long-context analysis with JavaScript and system R    | [rlm](extensions/rlm)                                                                                |
-| Persistent notes, historical queries, and recall      | [memory](extensions/memory)                                                                          |
+| Project/global notes, scoped history, and recall      | [memory](docs/memory.md)                                                                             |
 | Explicit goals and continuation                       | [/goals](extensions/goals)                                                                           |
 | R/C structural review; optional Jarl lint             | [anti_slop](skills/r-c-anti-slop/SKILL.md)                                                           |
 | Web and biomedical evidence search                    | [web_search](extensions/codex-web-search), [biomedical_search](extensions/biomedical-evidence)       |
@@ -38,8 +38,9 @@ configuration](docs/operations.md).
 | Decision-review instructions and SSH-safe path clicks | [expert-discipline](extensions/expert-discipline), [vscode-path-links](extensions/vscode-path-links) |
 
 Browse [skills](skills/) for R packages, native bindings, genomics, and
-project workflows. [package.json](package.json) declares the loaded
-extensions and skills.
+project workflows, including [orientation after a handoff or conflicting
+evidence](skills/project-orientation/SKILL.md).
+[package.json](package.json) declares the loaded extensions and skills.
 
 Keep `completions` enabled alongside background tasks and RLM. Reading a
 terminal result suppresses its pending notice; unread notices are
@@ -53,9 +54,9 @@ npm install
 npm run check
 ```
 
-The check runs typechecking, the current test suite, package/docs
-checks, and README consistency. It is **not** an exhaustive integration
-certification.
+This is the full local gate: typechecking, current tests, package/docs
+checks, and README consistency—not an exhaustive integration
+certification. Use the playbook’s change-scoped checks during editing.
 
 - [QA standard](EXTENSION_QA_STANDARD.md): requirements for changes.
 - [Testing playbook](EXTENSION_TESTING_PLAYBOOK.md): commands,

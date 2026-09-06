@@ -3,7 +3,7 @@ import { isAbsolute, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-const analyzerPath = fileURLToPath(new URL("../../scripts/anti_slop.R", import.meta.url));
+const analyzerPath = fileURLToPath(new URL("../../skills/r-c-anti-slop/scripts/anti_slop.R", import.meta.url));
 const languageSchema = Type.Union([Type.Literal("auto"), Type.Literal("r"), Type.Literal("c")]);
 
 const parameters = Type.Object({

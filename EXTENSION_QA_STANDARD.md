@@ -7,33 +7,53 @@ pi-skills. This is our maintenance policy, not an upstream Pi certification.
 
 ## Evidence required for a change
 
-1. Identify the affected public contract: tool/schema, command, hook, UI action,
-   stored data, configuration, or installed artifact. State observable behavior,
-   ownership, limits, and failure/cancellation semantics before changing it.
-2. Map every changed behavior and plausible edge case to an executable assertion
-   at the lowest reliable layer. List uncovered cases in the coverage matrix,
-   with the risk and the next test needed. A test filename or passing typecheck
-   alone is not evidence for a behavior.
+1. Identify the affected contract: tool/schema, command, hook, UI action, stored
+   data, configuration, skill/prompt behavior, or installed artifact. Consult its
+   source and relevant documentation; do not load unrelated architecture or
+   workflow documents. For runtime changes, establish ownership, limits, and
+   failure/cancellation semantics.
+2. Map changed runtime behavior and plausible edge cases to executable assertions
+   at the lowest reliable layer. For skill/prompt edits, review representative
+   matching and non-matching tasks and retain the required domain constraints;
+   claim model behavior only after exercising it. Record new coverage or gaps in
+   the matrix. A test filename or typecheck alone is not behavioral evidence.
 3. For a bug, preserve the reproducer as a regression. Where practical, demonstrate
    failure on the old implementation. Put the watchdog outside the event loop or
    process that the regression could freeze.
 4. Exercise the real boundary when the claim depends on it. Fake Pi objects test
    hook logic, not SDK integration; a `sendMessage` spy does not prove a follow-up
    turn; checking an archive list does not prove installation or loadability.
-5. Run `npm run check` serially, plus affected boundary/platform gates. Report
-   revision, dirty-tree scope, host/dependency versions, commands, failures and
-   skips. Missing prerequisites are not passes. Do not describe an unrun gate as
-   implemented coverage merely because upstream documentation lists it.
+5. Use the change-scoped gates below. Report revision/dirty scope, commands,
+   failures and skips; include host/dependency versions for runtime or
+   compatibility claims. Missing prerequisites are not passes. Upstream's list
+   of gates is not evidence that those gates ran here.
 6. Update contracts, tests, and coverage in the same change. Keep the README a
    short entry point; put operating details in [docs/operations.md](docs/operations.md).
 
 Existing gaps do not waive testing for a change that touches that boundary.
 If a necessary gate cannot run, report the limitation and do not mark that
-behavior verified. A documentation-only change need not invent a runtime harness.
+behavior verified. Do not rerun unchanged gates after every edit; rerun those
+invalidated by subsequent changes.
+
+## Gate scope
+
+Choose by changed behavior, not filename. Executable examples, Rmd code, skills,
+and prompt instructions are not automatically prose-only.
+
+| Change | Verification before handoff |
+|---|---|
+| Prose-only | Relevant link checks (`npm run test:package` here); render/check README when its source changes. No unrelated runtime suite. |
+| Skills, prompts, or instruction policy | Review matching/non-matching tasks, authority routes, permissions, and preserved invariants; package/docs checks. Exercise affected prompt/host tests if runtime injection or tool behavior changes. |
+| Runtime, tests, build, dependencies, or packaging | Focused tests while iterating; `npm run check` and required boundary/platform gates before handoff. |
+| Release or compatibility claim | Full local gate plus clean installed-artifact and claimed host/platform evidence. |
+
+A mixed change takes the applicable stronger gates. Repository-specific release
+or safety requirements still apply; narrowing routine checks is not a waiver.
 
 ## Edge-case review
 
-Apply these to the changed surface; record why a category is not applicable.
+Use the rows relevant to the changed surface. Explain a disputed omission, not
+an inventory of irrelevant categories for every small edit.
 
 | Boundary | Cases to consider |
 |---|---|
@@ -64,6 +84,7 @@ Apply these to the changed surface; record why a category is not applicable.
 
 ## Completion report
 
-State **changed**, **verified**, **not verified**, and **remaining risks**. Link to
-assertions or retained results when claiming coverage. "Every plausible edge case"
-is a review obligation, not a measurable guarantee that no unknown bugs remain.
+Summarize the change and checks in proportion to the task. State material risks
+and unverified claims; link to assertions or retained results where needed.
+"Every plausible edge case" is a review obligation, not a guarantee that no
+unknown bugs remain or a requirement to narrate a checklist for a typo fix.

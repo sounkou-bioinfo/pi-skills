@@ -2,13 +2,28 @@
 -- atomically for the next bounded tool query; durable memory remains untouched.
 CREATE TEMP TABLE memory_query_context (
     as_of_transaction INTEGER NOT NULL,
-    line_budget INTEGER NOT NULL
+    line_budget INTEGER NOT NULL,
+    graph VARCHAR,
+    summary_prefix VARCHAR NOT NULL
 );
-INSERT INTO memory_query_context VALUES (0, 80);
+INSERT INTO memory_query_context VALUES (0, 80, NULL, 'memory:summary/');
 
-CREATE TEMP VIEW as_of_statement AS
+-- Legacy and scoped protocols must not supersede one another, even if a v1
+-- writer happens to reuse the same graph/subject/predicate as a scoped writer.
+CREATE TEMP VIEW snapshot_statement AS
+WITH history AS (
+    SELECT s.*, t.transaction_time AS valid_from_time,
+           s.transaction_id AS valid_from_transaction,
+           lead(s.transaction_id) OVER slot AS valid_to_transaction,
+           lead(t.transaction_time) OVER slot AS valid_to_time
+    FROM memo.statements s JOIN memo.transactions t USING (transaction_id)
+    WINDOW slot AS (
+        PARTITION BY s.graph, s.subject, s.predicate, (s.stanza LIKE 'memory:scoped-%')
+        ORDER BY s.transaction_id, s.ordinal
+    )
+)
 SELECT h.*
-FROM memo.statement_history h
+FROM history h
 CROSS JOIN memory_query_context q
 WHERE h.valid_from_transaction <= q.as_of_transaction
   AND (
@@ -16,17 +31,43 @@ WHERE h.valid_from_transaction <= q.as_of_transaction
     OR h.valid_to_transaction > q.as_of_transaction
   );
 
+CREATE TEMP VIEW as_of_statement AS
+SELECT h.*
+FROM snapshot_statement h, memory_query_context q
+WHERE (q.graph IS NULL AND h.stanza NOT LIKE 'memory:scoped-%')
+   OR (h.graph = q.graph AND h.stanza LIKE 'memory:scoped-note/%')
+   OR (h.graph = 'memory:system' AND h.stanza LIKE 'memory:scoped-summary/%' AND EXISTS (
+       SELECT 1 FROM snapshot_statement scope
+       WHERE scope.stanza = h.stanza AND scope.subject = h.subject
+         AND scope.graph = 'memory:system' AND scope.predicate = 'memory:scope'
+         AND scope.value = q.graph
+   ));
+
 CREATE TEMP VIEW node_to_node_statement AS
 SELECT * FROM as_of_statement WHERE object IS NOT NULL;
 
 CREATE TEMP VIEW node_to_value_statement AS
 SELECT * FROM as_of_statement WHERE value IS NOT NULL;
 
+-- Local ordering is scoped; immutable stanza/transaction IDs never change.
+-- The v1 persistent views deliberately do not recognize scoped record prefixes.
 CREATE TEMP VIEW as_of_note AS
-SELECT n.*
-FROM memo.note_statement n
+SELECT row_number() OVER (ORDER BY s.transaction_id, s.ordinal) - 1 AS note_index,
+       s.*, t.transaction_time,
+       json_extract(t.receipt, '$.evidence')::VARCHAR AS evidence,
+       json_extract(t.receipt, '$.recordedIn')::VARCHAR AS recorded_in
+FROM memo.statements s
+JOIN memo.transactions t USING (transaction_id)
 CROSS JOIN memory_query_context q
-WHERE n.transaction_id <= q.as_of_transaction;
+WHERE s.transaction_id <= q.as_of_transaction
+  AND (s.stanza LIKE 'memory:note/%' OR s.stanza LIKE 'memory:scoped-note/%')
+  AND ((q.graph IS NULL AND s.stanza LIKE 'memory:note/%')
+       OR (s.graph = q.graph AND s.stanza LIKE 'memory:scoped-note/%'));
+
+CREATE TEMP VIEW current_note AS
+SELECT n.* FROM as_of_note n
+JOIN as_of_statement s
+  ON s.transaction_id = n.transaction_id AND s.ordinal = n.ordinal;
 
 CREATE TEMP VIEW as_of_summary AS
 SELECT
@@ -42,7 +83,7 @@ SELECT
 FROM (
     SELECT DISTINCT subject AS summary
     FROM as_of_statement
-    WHERE stanza LIKE 'memory:summary/%'
+    WHERE stanza LIKE (SELECT summary_prefix || '%' FROM memory_query_context)
       AND graph = 'memory:system'
       AND subject = stanza
 ) subjects
@@ -83,7 +124,8 @@ levels(block_size) AS (
     WHERE block_size * 2 <= note_count
 )
 SELECT
-    'memory:summary/' || CAST(i * block_size AS VARCHAR) || '-' ||
+    q.graph,
+    q.summary_prefix || CAST(i * block_size AS VARCHAR) || '-' ||
       CAST((i + 1) * block_size AS VARCHAR) AS summary,
     i * block_size AS range_start,
     (i + 1) * block_size AS range_end,
@@ -93,7 +135,7 @@ SELECT
         SELECT stanza FROM as_of_note WHERE note_index = i * block_size
       )
       ELSE
-        'memory:summary/' || CAST(i * block_size AS VARCHAR) || '-' ||
+        q.summary_prefix || CAST(i * block_size AS VARCHAR) || '-' ||
           CAST(CAST(i * block_size + block_size / 2 AS BIGINT) AS VARCHAR)
     END AS left_summary,
     CASE
@@ -101,10 +143,10 @@ SELECT
         SELECT stanza FROM as_of_note WHERE note_index = i * block_size + 1
       )
       ELSE
-        'memory:summary/' || CAST(CAST(i * block_size + block_size / 2 AS BIGINT) AS VARCHAR) || '-' ||
+        q.summary_prefix || CAST(CAST(i * block_size + block_size / 2 AS BIGINT) AS VARCHAR) || '-' ||
           CAST((i + 1) * block_size AS VARCHAR)
     END AS right_summary
-FROM levels, note_stats,
+FROM levels, note_stats, memory_query_context q,
      range(0, CAST(floor(note_count / block_size) AS BIGINT)) blocks(i);
 
 CREATE TEMP VIEW pending_summary AS
@@ -123,7 +165,8 @@ CREATE TEMP VIEW next_summary_source AS
 SELECT
     n.note_index AS source_order,
     n.stanza AS source,
-    n.value AS source_text,
+    n.value || CASE WHEN n.evidence IS NULL THEN '' ELSE ' [evidence: ' || n.evidence || ']' END
+            || CASE WHEN n.recorded_in IS NULL THEN '' ELSE ' [recorded in: ' || n.recorded_in || ']' END AS source_text,
     n.transaction_id AS source_transaction,
     NULL::VARCHAR AS source_hash
 FROM next_pending_summary p
@@ -216,7 +259,9 @@ SELECT
     CASE WHEN f.range_end - f.range_start = 1 THEN 'note' ELSE 'summary' END AS kind,
     CASE WHEN f.range_end - f.range_start = 1 THEN n.value ELSE s.summary_text END AS value,
     CASE WHEN f.range_end - f.range_start = 1 THEN n.transaction_time ELSE NULL END AS transaction_time,
-    CASE WHEN f.range_end - f.range_start = 1 THEN n.graph ELSE NULL END AS graph,
+    CASE WHEN f.range_end - f.range_start = 1 THEN n.graph ELSE (SELECT graph FROM memory_query_context) END AS graph,
+    n.evidence,
+    n.recorded_in,
     CASE
       WHEN f.range_end - f.range_start = 1 THEN true
       ELSE s.summary IS NOT NULL

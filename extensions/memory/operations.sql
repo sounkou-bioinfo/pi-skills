@@ -14,7 +14,7 @@ WHERE transaction_id = ?;
 
 -- name: set_query_context
 UPDATE memory_query_context
-SET as_of_transaction = ?, line_budget = ?;
+SET as_of_transaction = ?, line_budget = ?, graph = ?, summary_prefix = ?;
 
 -- name: status
 SELECT
@@ -28,6 +28,9 @@ FROM memory_query_context q;
 
 -- name: wake
 SELECT * FROM wake ORDER BY range_start;
+
+-- name: current_notes
+SELECT * FROM current_note ORDER BY note_index DESC LIMIT ?;
 
 -- name: next_summary_task
 SELECT * FROM next_summary_task;
@@ -55,7 +58,9 @@ SELECT
     CASE WHEN c.child_end - c.child_start = 1 THEN 'note' ELSE 'summary' END AS kind,
     CASE WHEN c.child_end - c.child_start = 1 THEN n.value ELSE s.summary_text END AS value,
     CASE WHEN c.child_end - c.child_start = 1 THEN n.transaction_time ELSE NULL END AS transaction_time,
-    CASE WHEN c.child_end - c.child_start = 1 THEN n.graph ELSE NULL END AS graph,
+    CASE WHEN c.child_end - c.child_start = 1 THEN n.graph ELSE (SELECT graph FROM memory_query_context) END AS graph,
+    n.evidence,
+    n.recorded_in,
     CASE WHEN c.child_end - c.child_start = 1 THEN true ELSE s.summary IS NOT NULL END AS ready
 FROM children c
 LEFT JOIN as_of_note n
@@ -106,33 +111,36 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: fts_watermark
 SELECT coalesce(max(transaction_id), 0) AS transaction_id
-FROM memo.note_statement
-WHERE transaction_id <= ?;
+FROM memo.statements
+WHERE transaction_id <= ?
+  AND (stanza LIKE 'memory:note/%' OR stanza LIKE 'memory:scoped-note/%');
 
 -- name: fts_documents
 SELECT
     CAST(transaction_id AS VARCHAR) || ':' || CAST(ordinal AS VARCHAR) AS document_id,
-    note_index,
-    transaction_id,
-    ordinal,
     stanza,
     subject,
     predicate,
     value,
     graph
-FROM memo.note_statement
-WHERE transaction_id <= ?;
+FROM memo.statements
+WHERE transaction_id <= ?
+  AND (stanza LIKE 'memory:note/%' OR stanza LIKE 'memory:scoped-note/%');
 
 -- name: fts_recall
 SELECT *
 FROM (
-    SELECT d.*,
+    SELECT n.*,
            fts_main_memory_fts_document.match_bm25(
              document_id,
              ?,
              fields := 'value,subject,predicate,graph'
            ) AS score
     FROM memory_fts_document d
+    JOIN as_of_note n USING (stanza)
+    WHERE (? = false OR EXISTS (
+        SELECT 1 FROM current_note c WHERE c.stanza = n.stanza
+    ))
 ) ranked
 WHERE score IS NOT NULL
 ORDER BY score DESC, note_index DESC

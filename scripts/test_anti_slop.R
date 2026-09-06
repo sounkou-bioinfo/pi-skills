@@ -2,7 +2,13 @@
 
 file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
 test_path <- if (length(file_arg) > 0L) sub("^--file=", "", file_arg[[1]]) else "scripts/test_anti_slop.R"
-script <- normalizePath(file.path(dirname(test_path), "anti_slop.R"), winslash = "/", mustWork = TRUE)
+test_directory <- dirname(normalizePath(test_path, winslash = "/", mustWork = TRUE))
+launcher <- normalizePath(file.path(test_directory, "anti_slop.R"), winslash = "/", mustWork = TRUE)
+script <- normalizePath(
+  file.path(test_directory, "..", "skills", "r-c-anti-slop", "scripts", "anti_slop.R"),
+  winslash = "/",
+  mustWork = TRUE
+)
 
 `%||%` <- function(left, right) if (is.null(left)) right else left
 
@@ -25,6 +31,11 @@ parse_result <- function(...) {
 }
 
 if (!requireNamespace("jsonlite", quietly = TRUE)) fail("test_anti_slop.R requires jsonlite")
+
+launcher_help <- suppressWarnings(system2("Rscript", c(launcher, "--help"), stdout = TRUE, stderr = TRUE))
+script_help <- suppressWarnings(system2("Rscript", c(script, "--help"), stdout = TRUE, stderr = TRUE))
+expect_identical(attr(launcher_help, "status") %||% 0L, 0L, "Repository compatibility launcher should execute")
+expect_identical(launcher_help, script_help, "Repository launcher should delegate to the skill-owned analyzer")
 
 work <- tempfile("anti-slop-test-")
 dir.create(work)

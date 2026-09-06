@@ -1,13 +1,13 @@
 ---
 name: ducktinycc-development
-description: Work in sounkou-bioinfo/DuckTinyCC on TinyCC state/artifact lifetime, generated UDF bridges, recursive descriptors, embedded assets, allocator domains, trusted native code, and extension tests.
+description: Use for DuckTinyCC compiler integration, generated UDF bridges, artifact lifetime, or build changes.
 ---
 
 # DuckTinyCC development
 
 ## Runtime contract
 
-Read repository authorities first. Distinguish staged `tcc_new_state` setup from a real `TCCState`, and keep relocated compiled code alive for every registered SQL function that can call it. Registration metadata owns the compiled artifact lifetime.
+Follow repository instructions and consult the contract for the compiler, bridge, or artifact being changed. Distinguish staged `tcc_new_state` setup from a real `TCCState`, and keep relocated compiled code alive for every registered SQL function that can call it. Registration metadata owns the compiled artifact lifetime.
 
 Generated wrappers obey recursive DuckDB/C descriptors, including borrowed type descriptors, UNION member/tag rules, NULL validity, child indexing, and vector cardinality. Do not hand-diverge generated and runtime semantics.
 
@@ -21,4 +21,4 @@ Embedded runtime assets are content-addressed and verified before extraction/loa
 
 ## Gates
 
-Run current debug/release SQL suites, embedded-release tests, community simulation, generated docs/catalog checks, and subprocess safety tests. Generic C/SQL style belongs to `sounkou-engineering-style`; this skill owns TinyCC and generated-bridge invariants.
+Use affected SQL and subprocess safety tests during implementation. Before compiler/runtime/build handoff, run the repository-required debug/release, embedded-release, community-simulation, and generated-output gates. Prose-only changes need relevant documentation checks. Generic C/SQL style belongs to `sounkou-engineering-style`; this skill owns TinyCC and generated-bridge invariants.

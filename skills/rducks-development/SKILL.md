@@ -1,6 +1,6 @@
 ---
 name: rducks-development
-description: Work in sounkou-bioinfo/Rducks on execution plans, R-thread/SEXP ownership, direct and Quack/NNG marshalling, exact DuckDB ABI artifacts, capability probes, generated catalogs, wasm, and package gates.
+description: Use for Rducks implementation, ABI/transport changes, or package builds.
 ---
 
 # Rducks development
@@ -21,7 +21,7 @@ Generated catalogs/docs derive from their authority; authored R files remain aut
 
 ## Gates
 
-Use current repository commands, normally covering:
+Use affected tests while iterating and current repository-required gates before native/ABI/transport/package handoff. Select the relevant surfaces below; a prose-only edit needs documentation checks, not every runtime:
 
 - package tests and tarball check;
 - generated R documentation and catalog drift;

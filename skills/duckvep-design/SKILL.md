@@ -1,6 +1,6 @@
 ---
 name: duckvep-design
-description: Design DuckDB-native variant consequence prediction. Use when transcript/reference caches, haplotype-aware consequences, bcftools csq reuse, annotation joins, or structured outputs are central.
+description: Use when designing DuckDB-native variant consequence prediction, including transcript and haplotype semantics.
 ---
 
 # DuckVEP design

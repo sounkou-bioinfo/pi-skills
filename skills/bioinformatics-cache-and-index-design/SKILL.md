@@ -1,6 +1,6 @@
 ---
 name: bioinformatics-cache-and-index-design
-description: Choose cache, index, and annotation-store formats from measured bioinformatics access patterns. Use when startup, repeated exact/interval lookup, provenance, or serving layout is the design problem.
+description: Use when choosing or changing bioinformatics caches and indexes for repeated queries.
 ---
 
 # Bioinformatics cache and index design

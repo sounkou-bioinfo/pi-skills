@@ -1,6 +1,6 @@
 ---
 name: duckqc-design
-description: Design DuckDB-native sequencing QC with queryable metrics and fused scans. Use for DuckQC-style planning, metric contracts, reduction/threading, and compatibility outputs.
+description: Use when designing DuckDB-native sequencing QC metrics, reductions, or compatibility outputs.
 ---
 
 # DuckQC design

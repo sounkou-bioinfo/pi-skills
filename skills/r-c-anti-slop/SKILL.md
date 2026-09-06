@@ -1,58 +1,47 @@
 ---
 name: r-c-anti-slop
-description: Audit R/C source with the repository Tree-sitter analyzer. Use to review redundant guards, helper and validation-layer sprawl, false path threat models, cyclomatic complexity, no-op handlers, or host-unsafe C assertions.
+description: Use to audit R/C helper sprawl, redundant checks, complexity, or host-unsafe assertions with Tree-sitter.
 ---
 
 # R/C anti-slop
 
-## Authority
+## Run the audit
 
-Use `scripts/anti_slop.R` directly or the `anti_slop` Pi tool. Tree-sitter is the only parser authority for native rules. Missing grammars and parse errors are failures; there is no regex or alternate-parser fallback.
+Use the `anti_slop` Pi tool when available. For direct execution, use
+[`scripts/anti_slop.R`](scripts/anti_slop.R), resolving that path relative to the
+skill directory containing this `SKILL.md`. Do not infer a Pi installation,
+package checkout, or home-directory path. Tree-sitter is the only parser authority
+for native rules. Missing grammars and parse errors are failures; there is no regex
+or alternate-parser fallback.
 
-File and directory scans are supported. Git directory scans use tracked R/C sources; other directories recurse over recognized suffixes. Direct-call counts used by helper rules are scope-wide review evidence; dynamic callback/get calls are intentionally not inferred.
+Git directory scans use tracked R/C sources; non-Git directories recurse over
+recognized suffixes. Direct-call counts are scope-wide review evidence, not
+inference about callbacks or `get()`. Complexity **≥15 warns**.
 
-Jarl is an optional complementary R linter, not a parser fallback or bundled dependency. Set `jarl = true` on the Pi tool, use `/anti-slop --jarl path`, or pass `--jarl jarl` to the script. An explicit Jarl request fails if the executable or its JSON diagnostics are unavailable; findings are namespaced as `jarl/<rule>`. Results disclose the Jarl execution state, disabled native rules, total findings, and truncation state. Let Jarl own broad lint rules and keep native anti-slop rules limited to structural review prompts it does not provide.
+Jarl is optional, complementary, and neither bundled nor a parser fallback.
+Request it with tool `jarl=true`, `/anti-slop --jarl path`, or script `--jarl jarl`.
+An explicit request fails if the executable or valid JSON diagnostics are missing.
+Results report Jarl state, disabled rules, totals, and truncation; Jarl findings
+are namespaced as `jarl/<rule>`.
 
-## Rules
+## Interpret only the relevant findings
 
-R rules, by exact trigger:
+Look up reported rules in [exact rule triggers](references/rules.md). Findings
+are review prompts, not automatic deletions. Preserve real admission contracts,
+R/C ownership and allocation checks, S7/s7contract invariants, and cleanup with
+observable effects. Check literal contents and condition-forcing semantics before
+removing apparently equivalent branches. Replace host-unsafe assertions with
+explicit error propagation, not silent omission.
 
-- `r-final-return`: a `return(...)` that is the final expression of a braced function (R returns that expression automatically).
-- `r-rethrow-handler`: `tryCatch(..., error = function(e) stop(e))` with a one-argument handler that merely rethrows its caught condition.
-- `r-duplicate-adjacent-guard`: two adjacent `if` statements with the same Tree-sitter expression, a known side-effect-free validation condition, and an earlier `stop()`/`return()` consequence.
-- `r-else-null`: `else NULL` where the `if` is a standalone expression in a braced body, so an absent alternative already yields `NULL`.
-- `r-redundant-else-after-termination`: an `else` on a standalone `if` whose true branch is exactly one `stop()` or `return()`; outdent the alternative after the terminating guard.
-- `r-identical-if-branches`: a known side-effect-free condition whose true and false branches have identical parsed structure and token contents (including whitespace inside literals); confirm that forcing the condition is not contractual before removing it.
-- `r-private-helper-usage`: every top-level private `.name <- function(...)` together with its direct call-site count in the analysis scope; callbacks and `get()` remain dynamic and are not counted.
-- `r-single-use-predicate-helper`: a top-level, side-effect-free predicate helper with exactly one direct call from another assigned function in the analysis scope, regardless of whether its name starts with a dot.
-- `r-scalar-validator-helper`: a dedicated helper that hand-rolls scalar-string validation by composing `is.character()`, `length()`, `is.na()`, and `nzchar()` instead of placing a concise check at a real admission boundary.
-- `r-path-threat-model`: a helper that rejects parent path segments with a `grepl()` string pattern; require distinct producer/consumer principals and privileges rather than importing traversal-security posture into same-principal local R configuration.
-- `r-conditional-sprawl`: any maximal boolean expression with more than three atomic `&&`, `||`, `&`, or `|` clauses, including equivalent direct clauses supplied through `all(...)`, `any(...)`, `all(c(...))`, or `any(c(...))`, whether used as a condition, assigned to a local alias, passed as an argument, or returned. Renaming or mechanically re-encoding the unchanged expression does not reduce its decision structure and must not evade the rule.
-- `r-implicit-length-test`: `length(x)` or `!length(x)` used as a condition, relying on numeric-to-logical coercion (`0L` is false, positive lengths are true); use `length(x) == 0L` or `length(x) > 0L` to state the intended cardinality.
-- `r-cyclomatic-complexity`: a function whose cyclomatic complexity is 15 or greater, enforcing a score below 15 with `cyclocomp`-compatible contributions for `if`, `for`, `while`, `repeat`, `&&`, and `||`; nested function bodies are scored independently, while `&`, `|`, and `ifelse()` do not add paths.
+## Verify the change
 
-C rules, by exact trigger:
+For source changes, compare before/after native results; add Jarl when installed
+and pinned for the target repository. Inspect changed AST sites and run affected
+behavior/error/lifetime tests, followed by the repository-required handoff gates.
+A policy-document edit does not itself require running every R/C runtime suite.
 
-- `c-final-void-return`: a final bare `return;` in a `void` function.
-- `c-duplicate-adjacent-guard`: adjacent C `if` statements with the same side-effect-free condition and an earlier direct `return` consequence.
-- `c-empty-else`: `else {}`.
-- `c-runtime-assert`: `assert(...)`. In an embedded extension, determine whether its predicate can depend on user input, allocation, I/O, or a recoverable host condition; replace those cases with an explicit checked branch and host-visible error or status return. A proven internal development invariant may remain, or this rule may be disabled locally.
-
-## Interpretation
-
-Findings are review prompts, not automatic deletions.
-
-Preserve:
-
-- concise scalar admission contracts at genuine package, API, serialization, or system boundaries;
-- distinct ownership, allocation, API, and host-error checks;
-- S7 property/validator invariants and `s7contract` admission conformance;
-- cleanup that has an observable resource effect.
-
-Review/remove only proven cases: redundant final returns and terminating `else` branches, identical pure-condition branches, no-op rethrow handlers, duplicated adjacent terminating guards, empty alternatives, ambiguous `length(x)` truthiness, unjustified one-use predicate chains, translated scalar-validator layers, path-security checks with no privilege boundary, cyclomatically tangled functions, sprawling conditions that hide repeated policy, and C assertions reachable from embedded-host input/runtime paths.
-
-Replace host-unsafe assertions with explicit error propagation, not silent omission.
-
-## Proof
-
-Run the native analyzer before and after; add Jarl when it is installed and pinned for the target repository. Scan the actual tracked working tree or requested source directly: a reformatted/copied temporary tree, selected source-only subset, disabled-rule profile, truncated output, or claimed Jarl run without matching result provenance is not proof of repository cleanliness. Inspect each changed AST site, run focused behavioral/error/lifetime tests, then repository gates and `git diff --check`. A clean analyzer or Jarl result does not prove program correctness.
+Scan the requested source or actual tracked tree. Copied/reformatted trees,
+selected subsets, suppressed profiles, truncated output, or claimed Jarl runs
+without provenance cannot establish repository cleanliness. Renaming or
+mechanically re-encoding a condition does not simplify its decision structure.
+A clean lint result is not proof of correctness or simplicity.

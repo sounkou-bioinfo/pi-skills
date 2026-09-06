@@ -1,6 +1,6 @@
 # Biomedical provider contracts
 
-Always call `biomedical_search` with `action=describe` for the current executable operation list. This reference records semantic boundaries that should remain visible in answers.
+Use `biomedical_search` with `action=describe` when the selected provider's current operation contract is not already known; do not guess operation or parameter names. This reference records semantic boundaries that should remain visible in answers.
 
 | Provider | Main role | Identifier/assembly contract | Important limitation |
 |---|---|---|---|
@@ -23,6 +23,17 @@ Always call `biomedical_search` with `action=describe` for the current executabl
 Use filters directly on resources rather than v1 `search/findBy...` paths. Parameters use snake_case and are enumerated by `action=describe`; unsupported filters are rejected because GWAS v2 can silently ignore unknown query names. For ontology traits, select the live OpenAPI parameter `show_child_trait=true` or `false` deliberately and prefer an ontology ID for precise retrieval. For gene searches, v2's default set differs from legacy v1; use `extended_geneset=true` only when that broader behavior is intended.
 
 The shared client follows API-provided HAL next links only up to `max_pages`; the host remains responsible for network admission. The documented 15-query-per-second limit is reflected by per-origin serialization and 70 ms minimum spacing.
+
+### Ontology-wide GWAS SNP enumeration
+
+For a broad ontology category such as infection-related traits:
+
+1. Resolve the intended parent term with `gwas_catalog/efo_traits` using supported fields such as `efo_trait` or `efo_id`; do not use guessed `search`, `query`, `trait`, or URI parameter names.
+2. Call `gwas_catalog/association_snps` with the resolved `efo_id`, `show_child_trait=true`, `size` up to 500, and a deliberate `max_pages`. Put `max_pages` inside that request or at the top level as the default for every request in the call.
+3. Use the compact result's `association_total`, `associations_retrieved`, and `complete` fields. Claim "all" only when `complete=true`; otherwise report the exact page/byte bound.
+4. The result deduplicates rsIDs and retains mapped ontology trait labels. Associations without an rsID are counted separately.
+
+This operation is a generic association projection, not an infection-specific workflow. Raw `associations` remains available when full association metadata is required. GWAS ontology expansion can be expensive, so the provider uses a 120-second request timeout while retaining per-origin request spacing and bounded retries.
 
 ## OmicsPred
 
