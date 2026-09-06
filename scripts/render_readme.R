@@ -12,9 +12,6 @@ check <- "--check" %in% trailing
 if (!requireNamespace("rmarkdown", quietly = TRUE)) {
   stop("Install the R package 'rmarkdown' to render README.md", call. = FALSE)
 }
-if (!requireNamespace("jsonlite", quietly = TRUE)) {
-  stop("Install the R package 'jsonlite' to render README.md", call. = FALSE)
-}
 
 output_file <- if (check) ".README.generated.md" else "README.md"
 

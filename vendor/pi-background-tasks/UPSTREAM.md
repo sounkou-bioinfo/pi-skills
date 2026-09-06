@@ -15,4 +15,10 @@ Local changes:
 
 The repository background-task and completion tests cover local behavior. The npm
 snapshot does not include upstream's test sources; its documented test commands
-are upstream references, not claims that those suites ran here.
+are upstream references, not claims that those suites ran here. The copied README,
+testing and publishing documents are labeled accordingly; their original parent
+workspace links are retained as historical text.
+
+Local policy: [QA standard](../../EXTENSION_QA_STANDARD.md),
+[testing playbook](../../EXTENSION_TESTING_PLAYBOOK.md), and
+[coverage matrix](../../TEST_PLAN.md).

@@ -1,3 +1,8 @@
+> **Upstream reference (npm 0.6.0), not pi-skills instructions or coverage.**
+> This snapshot omits upstream test sources. Use the [local QA standard](../../EXTENSION_QA_STANDARD.md)
+> and [coverage matrix](../../TEST_PLAN.md). Install/update/publishing instructions below
+> concern upstream, not this fork; see [vendor provenance](UPSTREAM.md).
+
 # Publishing pi-background-tasks
 
 This package is ready for both npm publishing and standalone git publishing.

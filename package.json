@@ -22,11 +22,17 @@
     "README.md",
     "README.Rmd",
     "CHANGELOG.md",
+    "AGENTS.md",
+    "EXTENSION_QA_STANDARD.md",
+    "EXTENSION_TESTING_PLAYBOOK.md",
+    "TEST_PLAN.md",
     "LICENSE"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "npm run test:background-tasks && npm run test:context-budget && npm run test:completions && npm run test:memory && npm run test:rlm && npm run test:expert-discipline && npm run test:anti-slop && npm run test:codex-web-search && npm run test:biomedical-evidence",
+    "check": "npm run typecheck && npm test && npm run check:readme",
+    "test:package": "node --test scripts/package.test.mjs",
+    "test": "npm run test:package && npm run test:background-tasks && npm run test:context-budget && npm run test:completions && npm run test:memory && npm run test:rlm && npm run test:expert-discipline && npm run test:anti-slop && npm run test:codex-web-search && npm run test:biomedical-evidence",
     "test:background-tasks": "rm -rf .background-task-test-build && tsc --target ES2023 --module NodeNext --moduleResolution NodeNext --strict --skipLibCheck --esModuleInterop --types node --rootDir . --outDir .background-task-test-build scripts/test_background_tasks.ts vendor/pi-background-tasks/src/core/common.ts vendor/pi-background-tasks/src/core/registry.ts vendor/pi-background-tasks/src/extension.ts && node .background-task-test-build/scripts/test_background_tasks.js; status=$?; rm -rf .background-task-test-build; exit $status",
     "test:context-budget": "rm -rf .context-budget-test-build && tsc --noEmit false --outDir .context-budget-test-build --declaration false && node --test .context-budget-test-build/context-budget/context-budget.test.js; status=$?; rm -rf .context-budget-test-build; exit $status",
     "test:completions": "rm -rf .completion-test-build && tsc --noEmit false --outDir .completion-test-build --declaration false && node --test .completion-test-build/completions/completions.test.js; status=$?; rm -rf .completion-test-build; exit $status",

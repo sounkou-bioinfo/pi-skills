@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a repository QA standard, testing playbook, and evidence-linked coverage matrix with explicit SDK/RPC/PTY/agent-loop gaps. Add package/doc checks to `npm test` and a serial `npm run check` gate.
+- Shorten the README to installation, capabilities, and development links; move runtime details to `docs/operations.md`. Label vendored QA and publishing claims as upstream history, not local coverage.
 - Repair six reproduced correctness failures: isolate RLM JavaScript in a terminable worker; prioritize fresh inspection evidence; classify signal-killed jobs as failures; keep RunStore hydration read-only and ownership-aware; send large prompts over stdin; compare anti-slop AST structure and literal tokens without stripping string contents.
 - Vendor `pi-background-tasks@0.6.0` with ISC attribution, replacing the npm dependency and postinstall patch. Route background/RLM completion notices through a session-owned idle batcher; terminal status/wait/log observations suppress pending wakes. Add silent detached RLM notifications and lifecycle regression tests.
 - Add a cache-safe `expert-discipline` extension: one byte-stable, marker-idempotent `before_agent_start` block preserves the chained base prompt, never stores or transforms user messages, tests consequential choices against a leading expert's strongest applicable rejection reason, and reports evidence, uncertainty, and material trade-offs without exposing private deliberation.
