@@ -1,8 +1,7 @@
 # Coverage and gaps
 
-This is the pi-skills coverage inventory, not a copy of upstream's acceptance
-checklist. The evidence column names the cases exercised by repository tests;
-it does **not** assert exhaustive coverage of that row.
+This inventory maps pi-skills behavior to repository tests and records the
+remaining coverage gaps. Each test covers the cases named in its row.
 See [the QA standard](EXTENSION_QA_STANDARD.md) and
 [testing playbook](EXTENSION_TESTING_PLAYBOOK.md) before adding or changing a gate.
 
@@ -17,11 +16,11 @@ See [the QA standard](EXTENSION_QA_STANDARD.md) and
 | Real Pi SDK and RPC | **Missing full suites**; optional [memory source smoke](EXTENSION_TESTING_PLAYBOOK.md#optional-fresh-pi-memory-source-smoke) | Source-load/schema/native projection is narrower than tool invocation, agent-loop lifecycle or RPC. |
 | Dock component and PTY/TUI | **Missing locally** | Need real component rendering plus keyboard/focus/scroll/cleanup scenarios. |
 | Scripted-provider agent loop | **Missing** | Need to observe actual follow-up model requests, not just message submissions. |
-| Clean tarball install and host/platform matrix | **Missing as automated gates** | An earlier manual source-loader smoke is not this evidence. |
+| Clean tarball install and host/platform matrix | **Missing as automated gates** | Clean installation and loading on supported hosts and platforms. |
 
 `npm run check` combines the implemented gates for runtime/build/package handoff.
 Use the [change-scoped gates](EXTENSION_QA_STANDARD.md#gate-scope) for prose and
-instruction edits. There is no `test:full` certification gate. Tests require native prerequisites; cold DuckDB extension
+instruction edits. Tests require native prerequisites; cold DuckDB extension
 provisioning may need network access. Run suites serially in one checkout.
 
 ## Surface matrix
@@ -37,28 +36,28 @@ provisioning may need network access. Run suites serially in one checkout.
 | R/C anti-slop | [adapter](extensions/anti-slop/anti-slop.test.ts) and [R fixtures](scripts/test_anti_slop.R): skill-local analyzer resolution, repository-launcher delegation, grammar/config/error cases, structural rules, banned suppressed integer coercion, complexity boundary, literal-preserving equality, Jarl protocol fixtures. | Real-host command path, grammar/Jarl version matrix; no transitive dataflow or proof of semantic equivalence. |
 | Web search | [codex-web-search.test.ts](extensions/codex-web-search/codex-web-search.test.ts): injected auth/HTTP, citations, absent auth, empty query, unterminated SSE. | Response body byte cap is absent; need auth-cancellation, oversized-body, multiline SSE, and live provider checks. |
 | Biomedical search | [biomedical-evidence.test.ts](extensions/biomedical-evidence/biomedical-evidence.test.ts): injected provider responses, schemas, receipts, rate spacing, selected pagination/retry paths. | Each provider's malformed/cancelled response cases, pagination-origin policy, and opt-in live contract checks. |
-| Expert discipline | [expert-discipline.test.ts](extensions/expert-discipline/expert-discipline.test.ts): stable/idempotent prompt block, preservation of base prompt and messages. | Real chained-extension behavior; tests cannot establish the quality of model decisions or provider cache hits. |
-| Mandatory skills | [mandatory-skills.test.ts](extensions/mandatory-skills/mandatory-skills.test.ts): complete `no-ghosts` and `native-tool-discipline` inclusion, idempotent prompt block, and base-prompt preservation. | Real chained-extension behavior; tests cannot establish model adherence in artifact wording or tool selection. |
-| VS Code path links | [source](extensions/vscode-path-links/index.ts), typecheck only. | No behavior tests. Need terminal detection, environment restoration, and Remote-SSH/WSL interaction evidence. |
-| Skills | [skill sources](skills/); package inventory plus manual Pi-loader/frontmatter checks and [orientation exercise](docs/orientation-pilot.md). | No task-level model effectiveness suite. Routing/constraint review is not measured selection quality; the native ABI pilot case is planning-only. |
+| Expert discipline | [expert-discipline.test.ts](extensions/expert-discipline/expert-discipline.test.ts): stable/idempotent prompt block, preservation of base prompt and messages. | Multi-extension prompt composition, model decision quality, and provider cache behavior. |
+| Mandatory skills | [mandatory-skills.test.ts](extensions/mandatory-skills/mandatory-skills.test.ts): complete `no-ghosts` and `native-tool-discipline` inclusion, idempotent prompt block, and base-prompt preservation. | Multi-extension prompt composition and model adherence to prose and tool-use rules. |
+| VS Code path links | [source](extensions/vscode-path-links/index.ts), typecheck only. | Terminal detection, environment restoration, and Remote-SSH/WSL behavior. |
+| Skills | [skill sources](skills/); package inventory, manual Pi-loader/frontmatter checks, and [orientation contract review](docs/orientation-pilot.md). | Task-level skill selection, model effectiveness, and native ABI behavior. |
 | Packaging and documentation | [package.test.mjs](scripts/package.test.mjs): local links and pack contents. | Clean install with fresh dependencies, SDK discovery, native assets on supported platforms. |
 
-## Retained manual memory evidence
+## Manual memory source-loader check
 
-The source-loader smoke passed on the dirty memory implementation over `0364b77`
-with Pi **0.85.1**, Node **24.14.1**, Linux x64 and `@duckdb/node-api`
-**1.5.4-r.1**. It used an isolated agent directory/database and no model request;
-registered schema and scoped native projection were asserted. Development types
-are Pi **0.84.1**, not the tested CLI version. This is not a clean-install or
-multi-host certification.
+The source-loader check used a working tree based on `0364b77`, identified by
+the source fingerprint below. It passed with Pi **0.85.1**, Node **24.14.1**,
+Linux x64 and `@duckdb/node-api` **1.5.4-r.1**. An isolated agent directory and
+database exercised schema registration and scoped native projection, without a
+model request. Development types are Pi **0.84.1**. Clean installation and other
+host/platform combinations remain untested by this check.
 
 Production memory source fingerprint:
 `2228a6b9182aced1a16266c5752cb9515c077bbcd484b3a91004fad6ad093dcd`.
 This hashes each filename followed by NUL and its bytes, in order: `index.ts`,
 `project.ts`, `store.ts`, `operations.sql`, `schema.sql`, `session.sql`, under
-`extensions/memory/`. Test/documentation changes are outside that fingerprint. The full local gate
-passed; subsequent scope-canonicalization refinements were rechecked with the
-14 memory/goals tests, package/render checks and fresh-Pi smoke at this fingerprint.
+`extensions/memory/`. Test/documentation changes are outside that fingerprint.
+Checks recorded at this fingerprint: 14 memory/goals tests, package/render
+checks, and a fresh-Pi source-loader check.
 
 ## Instruction-routing review cases
 
@@ -76,10 +75,8 @@ Check both the needed route and the work that should **not** be triggered.
 | Resume unfamiliar work after conflicting implementation/runtime reports | Project orientation: identify scope, applicable evidence and the decisive counterexample; preserve unresolved distinctions. | Treating memory as instructions, silently changing accepted semantics, or promoting private notes to `AGENTS.md`. |
 | Continue a familiar, already-scoped edit | Use the established context and relevant gate. | Invoking orientation simply because another edit began. |
 
-Shorter text and successful skill loading do not establish better model behavior.
-A model-specific comparison still needs recorded task outcomes, unnecessary reads,
-missed invariants, test results, and host/model versions; no Astra A/B claim is
-made by this cleanup.
+A model-specific effectiveness comparison requires recorded task outcomes,
+unnecessary reads, missed invariants, test results, and host/model versions.
 
 ## Priority boundary work
 
@@ -102,6 +99,6 @@ boundary. Any retained manual result must identify its exact revision and scope.
 ## Upstream material
 
 [Vendor provenance](vendor/pi-background-tasks/UPSTREAM.md) identifies the npm
-snapshot. Its README, testing plan, and publishing notes describe upstream;
-the snapshot omitted upstream test sources. Their historical "implemented" rows
-are not local proof, and their parent-workspace QA links are not our policy.
+snapshot. It includes upstream documentation but no upstream test sources.
+Local tests and gates are listed in this inventory and the
+[QA standard](EXTENSION_QA_STANDARD.md).
