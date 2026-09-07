@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Apply `no-ghosts` and `native-tool-discipline` through an idempotent mandatory-skills prompt hook.
+- Ban `suppressWarnings(as.integer(...))` in the Tree-sitter R anti-slop rules, including namespaced and parenthesized forms, and replace the analyzer's own suppressed integer parsing with explicit type, finiteness, integrality, and range validation.
 - Scope memory writes, current-slot/FTS retrieval, semantic views and summary forests by project or explicit global graph. Add Git/override identity, separate recorded checkout from declared evidence, and bound combined current context to eight records/12 KiB. Preserve v1 history and identifiers without relabeling it; legacy retrieval is explicit and read-only in the tool.
 - Add a task-conditional project-orientation skill for recovering decisions, testing consequential contradictions and retaining learned distinctions without mandatory repository tours or automatic instruction-file promotion.
 

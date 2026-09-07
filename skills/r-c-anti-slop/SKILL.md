@@ -16,7 +16,9 @@ or alternate-parser fallback.
 
 Git directory scans use tracked R/C sources; non-Git directories recurse over
 recognized suffixes. Direct-call counts are scope-wide review evidence, not
-inference about callbacks or `get()`. Complexity **≥15 warns**.
+inference about callbacks or `get()`. Complexity **≥15 warns**. Directly suppressing
+`as.integer()` coercion warnings is banned and reports an error; validate before
+conversion.
 
 Jarl is optional, complementary, and neither bundled nor a parser fallback.
 Request it with tool `jarl=true`, `/anti-slop --jarl path`, or script `--jarl jarl`.

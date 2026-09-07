@@ -17,6 +17,7 @@ rule_defaults <- c(
   "r-path-threat-model" = "warning",
   "r-conditional-sprawl" = "warning",
   "r-implicit-length-test" = "warning",
+  "r-suppressed-integer-coercion" = "error",
   "r-cyclomatic-complexity" = "warning",
   "c-final-void-return" = "warning",
   "c-duplicate-adjacent-guard" = "warning",
@@ -40,6 +41,17 @@ usage <- function() {
 
 fail <- function(message) stop(message, call. = FALSE)
 
+positive_integer <- function(value, message) {
+  if (is.character(value)) {
+    if (length(value) != 1L || is.na(value) || !grepl("^[+]?[0-9]+$", value)) fail(message)
+    value <- as.numeric(value)
+  }
+  if (length(value) != 1L || !is.numeric(value)) fail(message)
+  if (is.na(value) || !is.finite(value)) fail(message)
+  if (value != trunc(value) || value < 1 || value > .Machine$integer.max) fail(message)
+  as.integer(value)
+}
+
 require_package <- function(package) {
   if (!requireNamespace(package, quietly = TRUE)) {
     fail(paste0(
@@ -61,8 +73,6 @@ validate_cli_options <- function(options) {
   if (is.null(options$path)) fail("Provide one source FILE")
   if (!options$language %in% c("auto", "r", "c")) fail("--language must be auto, r, or c")
   if (!options$format %in% c("text", "json")) fail("--format must be text or json")
-  if (is.na(options$max_findings)) fail("--max-findings must be a positive integer")
-  if (options$max_findings < 1L) fail("--max-findings must be a positive integer")
   options
 }
 
@@ -84,7 +94,9 @@ parse_args <- function(args) {
     if (option %in% names(option_fields)) {
       parsed <- take_cli_value(args, i, option, inline_value)
       value <- parsed$value
-      if (option == "--max-findings") value <- suppressWarnings(as.integer(value))
+      if (option == "--max-findings") {
+        value <- positive_integer(value, "--max-findings must be a positive integer")
+      }
       out[[option_fields[[option]]]] <- value
       i <- parsed$index
     } else if (arg %in% c("-h", "--help")) {
@@ -166,11 +178,7 @@ merge_rule_config <- function(rules, configured_rules) {
 
 configured_max_findings <- function(value) {
   if (is.null(value)) return(NULL)
-  value <- suppressWarnings(as.integer(value))
-  if (length(value) != 1L) fail("Configuration 'max_findings' must be a positive integer")
-  if (is.na(value)) fail("Configuration 'max_findings' must be a positive integer")
-  if (value < 1L) fail("Configuration 'max_findings' must be a positive integer")
-  value
+  positive_integer(value, "Configuration 'max_findings' must be a positive integer")
 }
 
 read_rule_config <- function(path) {
@@ -755,6 +763,25 @@ find_r_implicit_length_test <- function(root, path, severity) {
   })
 }
 
+find_r_suppressed_integer_coercion <- function(root, path, severity) {
+  findings <- list()
+  walk_tree(root, function(node) {
+    if (!identical(node_type(node), "call")) return()
+    if (!function_name(node) %in% c("suppressWarnings", "base::suppressWarnings")) return()
+    arguments <- call_argument_nodes(node)
+    if (length(arguments) == 0L) return()
+    expression <- r_unwrap_parentheses(node_field(arguments[[1]], "value"))
+    if (!identical(node_type(expression), "call")) return()
+    if (!function_name(expression) %in% c("as.integer", "base::as.integer")) return()
+    findings[[length(findings) + 1L]] <<- new_finding(
+      "r-suppressed-integer-coercion", severity,
+      "Do not suppress as.integer() coercion warnings. Validate type, finiteness, integrality, and integer range before converting.",
+      path, node
+    )
+  })
+  findings
+}
+
 c_pure_guard <- function(node) {
   type <- node_type(node)
   if (type %in% c("identifier", "field_identifier", "number_literal", "char_literal", "string_literal", "null", "true", "false")) return(TRUE)
@@ -887,6 +914,7 @@ findings_for_language <- function(root, language, path, rules, private_helper_ca
       "r-path-threat-model" = find_r_path_threat_model,
       "r-conditional-sprawl" = find_r_conditional_sprawl,
       "r-implicit-length-test" = find_r_implicit_length_test,
+      "r-suppressed-integer-coercion" = find_r_suppressed_integer_coercion,
       "r-cyclomatic-complexity" = find_r_cyclomatic_complexity
     )
   } else {

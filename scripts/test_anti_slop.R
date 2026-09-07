@@ -64,6 +64,13 @@ expect_identical(limited_r_result$truncated, TRUE, "A bounded result must disclo
 expect_identical(limited_r_result$total_finding_count, 4L, "A bounded result must preserve its total finding count")
 inline_limited_r_result <- parse_result("--language=r", "--max-findings=1", r_path)
 expect_identical(length(inline_limited_r_result$findings), 1L, "Inline option values must match separate option values")
+for (invalid_max_findings in c("1.5", "2147483648", "not-a-number")) {
+  invalid_max_result <- run_analyzer("--max-findings", invalid_max_findings, r_path)
+  if (invalid_max_result$code == 0L ||
+      !grepl("--max-findings must be a positive integer", invalid_max_result$output, fixed = TRUE)) {
+    fail("Fractional, out-of-range, and non-numeric --max-findings values must fail without suppressed coercion warnings")
+  }
+}
 
 private_r_path <- file.path(work, "private-and-conditional.R")
 writeLines(c(
@@ -131,6 +138,28 @@ valid_r_result <- parse_result(valid_r_path)
 expect_identical(length(valid_r_result$findings), 0L, "A normal scalar admission guard must not be diagnosed")
 expect_identical(valid_r_result$engines$jarl, "off", "Results must disclose that Jarl was not requested")
 expect_identical(length(valid_r_result$disabled_rules), 0L, "Default analysis must disclose that no rules were disabled")
+
+suppressed_coercion_path <- file.path(work, "suppressed-coercion.R")
+writeLines(c(
+  "direct <- function(x) suppressWarnings(as.integer(x))",
+  "qualified <- function(x) base::suppressWarnings(base::as.integer(x))",
+  "named <- function(x) suppressWarnings(expr = as.integer(x))",
+  "parenthesized <- function(x) suppressWarnings((as.integer(x)))",
+  "other_warning <- function(x) suppressWarnings(as.double(x))",
+  "plain_coercion <- function(x) as.integer(x)"
+), suppressed_coercion_path)
+suppressed_coercion_result <- parse_result(suppressed_coercion_path)
+expect_identical(
+  vapply(suppressed_coercion_result$findings, `[[`, character(1), "rule"),
+  rep("r-suppressed-integer-coercion", 4L),
+  "Direct, namespaced, named, and parenthesized suppressed integer coercions must be diagnosed"
+)
+expect_identical(
+  unique(vapply(suppressed_coercion_result$findings, `[[`, character(1), "severity")),
+  "error",
+  "Suppressed integer coercion is banned by default"
+)
+
 no_function_r_path <- file.path(work, "no-function.R")
 writeLines("value <- 1L", no_function_r_path)
 no_function_r_result <- parse_result(no_function_r_path)
@@ -278,6 +307,13 @@ writeLines('{"rules":{"not-a-rule":"off"}}', invalid_config_path)
 invalid_config_result <- run_analyzer("--config", invalid_config_path, c_path)
 if (invalid_config_result$code == 0L || !grepl("Unknown anti-slop rule", invalid_config_result$output, fixed = TRUE)) {
   fail("Unknown configured rules must fail explicitly")
+}
+fractional_limit_config_path <- file.path(work, "fractional-limit.json")
+writeLines('{"max_findings":1.5}', fractional_limit_config_path)
+fractional_limit_result <- run_analyzer("--config", fractional_limit_config_path, c_path)
+if (fractional_limit_result$code == 0L ||
+    !grepl("Configuration 'max_findings' must be a positive integer", fractional_limit_result$output, fixed = TRUE)) {
+  fail("Fractional configured finding limits must fail instead of being silently truncated")
 }
 
 missing_jarl_command <- file.path(work, "missing-jarl")

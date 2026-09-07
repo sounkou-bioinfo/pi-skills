@@ -108,6 +108,8 @@ The summary hierarchy is independently implemented and inspired by
   Full stored/UI results remain intact; fresh evidence displaces old context.
   Eviction can invalidate cached prefixes. Configure `PI_CONTEXT_TOOL_RESULT_BYTES`
   (4096–51200) and `PI_CONTEXT_TOOL_RESULTS_TOTAL_BYTES` (16384–524288).
+- `mandatory-skills` loads `no-ghosts` and `native-tool-discipline` into every
+  system prompt. They govern final-artifact wording and native tool selection.
 - `expert-discipline` appends stable decision-review instructions. It cannot
   establish the correctness of the model's decisions or guarantee cache hits.
 - `vscode-path-links` disables Pi OSC 8 links in VS Code terminals so native path

@@ -39,6 +39,7 @@ grammars. See [runtime requirements and configuration](docs/operations.md).
 | R/C structural review; optional Jarl lint | [anti_slop](skills/r-c-anti-slop/SKILL.md) |
 | Web and biomedical evidence search | [web_search](extensions/codex-web-search), [biomedical_search](extensions/biomedical-evidence) |
 | Completion batching and bounded inspection context | [completions](extensions/completions), [context-budget](extensions/context-budget) |
+| Mandatory artifact and tool discipline | [no-ghosts](skills/no-ghosts/SKILL.md), [native-tool-discipline](skills/native-tool-discipline/SKILL.md), [prompt hook](extensions/mandatory-skills) |
 | Decision-review instructions and SSH-safe path clicks | [expert-discipline](extensions/expert-discipline), [vscode-path-links](extensions/vscode-path-links) |
 
 Browse [skills](skills/) for R packages, native bindings, genomics, and project
