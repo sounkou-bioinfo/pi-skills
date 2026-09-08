@@ -5,6 +5,10 @@ description: Use to audit R/C helper sprawl, redundant checks, complexity, or ho
 
 # R/C anti-slop
 
+For R source, apply [We Use R Damnit](../we-use-r-damnit/SKILL.md). Review the
+computation and contract owners before interpreting structural counts. Preserve
+necessary admission checks; challenge repeated validation of established facts.
+
 ## Run the audit
 
 Use the `anti_slop` Pi tool when available. For direct execution, use

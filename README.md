@@ -32,6 +32,7 @@ configuration](docs/operations.md).
 | Long-context analysis with JavaScript and system R    | [rlm](extensions/rlm)                                                                                                                                |
 | Project/global notes, scoped history, and recall      | [memory](docs/memory.md)                                                                                                                             |
 | Explicit goals and continuation                       | [/goals](extensions/goals)                                                                                                                           |
+| R-native coding style                                 | [We Use R Damnit](skills/we-use-r-damnit/SKILL.md)                                                                                                   |
 | R/C structural review; optional Jarl lint             | [anti_slop](skills/r-c-anti-slop/SKILL.md)                                                                                                           |
 | Web and biomedical evidence search                    | [web_search](extensions/codex-web-search), [biomedical_search](extensions/biomedical-evidence)                                                       |
 | Completion batching and bounded inspection context    | [completions](extensions/completions), [context-budget](extensions/context-budget)                                                                   |

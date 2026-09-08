@@ -5,6 +5,9 @@ description: Use for R package metadata, documentation generation, builds, check
 
 # R package development
 
+When writing or reviewing R code, apply
+[We Use R Damnit](../we-use-r-damnit/SKILL.md).
+
 ## Find the relevant authority
 
 Follow package/repository instructions. Consult `DESCRIPTION` for dependencies/metadata, `NAMESPACE` or its generator for exports/registration, build files for native/install work, and the affected tests for behavior changes. Use the package's Makefile/scripts as command authority; a README typo does not require a tour of all these files.

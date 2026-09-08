@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Define R-native coding idioms, language-object construction, dispatch, and contract-directed validation in the `we-use-r-damnit` skill.
 - Apply `no-ghosts` and `native-tool-discipline` through an idempotent mandatory-skills prompt hook.
 - Ban `suppressWarnings(as.integer(...))` in the Tree-sitter R anti-slop rules, including namespaced and parenthesized forms, and replace the analyzer's own suppressed integer parsing with explicit type, finiteness, integrality, and range validation.
 - Scope memory writes, current-slot/FTS retrieval, semantic views and summary forests by project or explicit global graph. Add Git/override identity, separate recorded checkout from declared evidence, and bound combined current context to eight records/12 KiB. Preserve v1 history and identifiers without relabeling it; legacy retrieval is explicit and read-only in the tool.

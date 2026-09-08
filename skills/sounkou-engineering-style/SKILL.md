@@ -15,7 +15,7 @@ For design/runtime changes, identify the invariant, its owner, its public bounda
 
 **C:** explicit ownership and cleanup; checked width/allocation arithmetic; host-visible errors instead of abort/exit; no fake object systems or future-only interfaces. Scalar code is the correctness oracle for SIMD: dispatch is centralized and capability-driven, never private ISA checks scattered through callers.
 
-**R:** idiomatic vectors/functions/S7; explicit scalar cardinality; shared helpers only for a repeated named invariant; let R/DBI errors stand when they already express the contract. Use an S7 class when a semantic value changes behavior, a property for a reusable field constraint, a generic for an open operation, and a method for the class-specific answer.
+**R:** apply [We Use R Damnit](../we-use-r-damnit/SKILL.md): native values, functions, dispatch, lexical scope, and language objects; contract-directed validation with one owner per invariant.
 
 **SQL/DuckDB:** composable relations and native kernels; readers separate from analytics; stable public semantics; no hidden mutable cross-thread state. A runtime capability is established by an API or layout probe, not guessed from a version or model-name string.
 

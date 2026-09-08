@@ -2,6 +2,7 @@
 
 - Apply [native-tool-discipline](skills/native-tool-discipline/SKILL.md) whenever selecting tools, commands, scripts, or file-editing methods.
 - Apply [no-ghosts](skills/no-ghosts/SKILL.md) whenever writing or editing prose or tests. Tests state the final contract independently of RED/GREEN sequencing.
+- Apply [We Use R Damnit](skills/we-use-r-damnit/SKILL.md) whenever writing, editing, reviewing, or generating R code.
 - For runtime/contract changes, use [the QA standard](EXTENSION_QA_STANDARD.md)
   and the affected rows of [TEST_PLAN.md](TEST_PLAN.md). For test commands,
   prerequisites, or a new harness, consult [the playbook](EXTENSION_TESTING_PLAYBOOK.md).

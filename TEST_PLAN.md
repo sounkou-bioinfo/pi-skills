@@ -67,6 +67,9 @@ Check both the needed route and the work that should **not** be triggered.
 | Task | Expected route / verification | Should not trigger |
 |---|---|---|
 | Fix a README spelling error | Authored README source, render/consistency and link checks. | Architecture tour or native/runtime suite. |
+| Write or review an R function, test, or executable Rmd example | We Use R Damnit: native operations, contract ownership, and affected behavior checks. | Scalar validation around every vector operation or a new object system without a semantic need. |
+| Construct or transform R expressions | R language objects and explicit evaluation context; test capture and evaluation semantics. | Executable string assembly or metaprogramming for an ordinary value operation. |
+| Change only TypeScript or C code | The relevant language/project contract and affected checks. | Loading R style or applying R object/validation rules to another language. |
 | Change executable Rmd code or a tool prompt | Affected behavior/prompt tests and relevant generation checks. | Classification as prose-only based on filename. |
 | Fix background signal/notification handling | Registry/completion regressions, full local gate, and applicable host-boundary proof. | Dropping lifecycle coverage because the patch is short. |
 | Change Rducks ABI/transport behavior | Rducks contract, affected ABI/data-plane checks and required package handoff gates. | A guessed ABI, an automatic fallback, or only documentation checks. |
