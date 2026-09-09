@@ -13,9 +13,9 @@ See [the QA standard](EXTENSION_QA_STANDARD.md) and
 | Unit, fake-Pi hooks, native/process tests | `npm test` | Cases below. Fake `ExtensionAPI` objects are not Pi SDK sessions. |
 | Docs and package inventory | `npm run test:package` | Local Markdown destinations and packed source/worker/SQL/skill/vendor assets; not a tarball install. |
 | Generated README | `npm run check:readme` | Source/render consistency, not accuracy of every prose claim. |
-| Real Pi SDK and RPC | **Missing full suites**; optional [memory source smoke](EXTENSION_TESTING_PLAYBOOK.md#optional-fresh-pi-memory-source-smoke) | Source-load/schema/native projection is narrower than tool invocation, agent-loop lifecycle or RPC. |
-| Dock component and PTY/TUI | **Missing locally** | Need real component rendering plus keyboard/focus/scroll/cleanup scenarios. |
-| Scripted-provider agent loop | **Missing** | Need to observe actual follow-up model requests, not just message submissions. |
+| Real Pi SDK and RPC | [Workbench SDK tests](extensions/goals/workbench-sdk.test.ts); optional [memory source smoke](EXTENSION_TESTING_PLAYBOOK.md#optional-fresh-pi-memory-source-smoke) | Workbench source loading, tools, loops and disk reopen are covered. General extension lifecycle and RPC suites remain missing. |
+| Component and PTY/TUI | [Workbench views](extensions/goals/workbench.test.ts); `npm run test:workbench:pty` | Real Pi commands, scroll, cancellation, focus and 80/40-column resize under tmux. Other docks, physical phones and remote-client behavior remain untested. |
+| Scripted-provider agent loop | `npm run test:workbench` | Actual model-request counts for workbench/goal/completion gating and admitted shell work. Broader provider, retry, compaction and lifecycle coverage remains missing. |
 | Clean tarball install and host/platform matrix | **Missing as automated gates** | Clean installation and loading on supported hosts and platforms. |
 
 `npm run check` combines the implemented gates for runtime/build/package handoff.
@@ -28,11 +28,12 @@ provisioning may need network access. Run suites serially in one checkout.
 | Surface | Executable evidence | Uncovered cases / next proof |
 |---|---|---|
 | Background tools, commands, dock | [test_background_tasks.ts](scripts/test_background_tasks.ts): runtime-directory recreation, injected SIGTERM/SIGKILL close events, real shell jobs, terminal status/log headers, observed/unread notices through fake Pi. | Full command/schema failures, real external signals/process trees, timeout/output-cap races, UI actions, Windows, and actual host lifecycle. |
-| Completion queue | [completions.test.ts](extensions/completions/completions.test.ts): both observation orders, deduplication, batch bounds, session filtering, synchronous send failure, busy/idle hooks, shutdown. | SDK/scripted-provider tests for real idle/follow-up ordering, switch/reload, submission failure, and interaction with goals. |
+| Completion queue | [completions.test.ts](extensions/completions/completions.test.ts): both observation orders, deduplication, batch bounds, session filtering, synchronous send failure, busy/idle hooks, shutdown. [Workbench SDK tests](extensions/goals/workbench-sdk.test.ts): paused notices remain visible without a model wake or delayed wake after renewal. | Other real idle/follow-up orderings, switch/reload, asynchronous submission failure and combined extension lifecycle. |
 | RLM | [rlm.test.ts](extensions/rlm/rlm.test.ts): model/effort policy, file helpers, worker cancellation/deadline, stdin transport, real R, serialized runs, live-owner hydration, targeted result observations. | Parent-process watchdog for the test itself; worker OOM/exit/RPC failure, dead/reused owner PIDs, process-tree cleanup, end-to-end controller and clean installed-worker loading. |
 | Context budget | [context-budget.test.ts](extensions/context-budget/context-budget.test.ts): UTF-8 bounds, head/tail retention, pass-through, immutability, fresh evidence/retry after saturated history, cap ordering. | Real SDK context conversion and interactions with compaction, memory, goals, and multiple extensions. |
 | Memory | [memory.test.ts](extensions/memory/memory.test.ts): real SQLite WAL/FTS, append-only/as-of views, concurrent writers, interleaved graph forests, wrong-scope/hash rejection, canonical scope admission, scoped invalidation, v1 view isolation and reopened snapshots, legacy-label collisions and cross-protocol supersession, current-slot filtering before FTS limits, separate evidence/checkout metadata, combined UTF-8 projection bounds, Git identity/forks/worktrees/overrides and oversized dirty listings, fake-hook freeze/next-turn/project switching, unambiguous cache-key framing and legacy write rejection. | Corrupt/interrupted storage, disk-full/permission failures, adversarial SQL resource limits, Git failure/host matrices, large-corpus cost, real session reload/cancellation and concurrent old/new Pi runtimes. Summary fidelity and applicability are not certified. |
-| Goals | [goals.test.ts](extensions/goals/goals.test.ts), via `test:memory`: explicit creation, stable policy, transient state, next-turn completion projection. | Command branches, continuation limits/failures, session lifecycle, real agent-loop interaction. Stored token budget is **not enforced cumulative expenditure**. |
+| Goals | [goals.test.ts](extensions/goals/goals.test.ts), via `test:workbench`: explicit creation, stable policy, transient state, next-turn completion projection. Workbench tests cover suppressed auto-continuation and goal replacement. | Remaining command branches, continuation limits/failures and combined lifecycle. Stored token budget is **not enforced cumulative expenditure**. |
+| Shared workbench | [Contract/view tests](extensions/goals/workbench.test.ts): proposals, explicit approval/renewal, repeated tool IDs, branch-local state, invalid input, actual evidence IDs, transient context and Unicode width/control sequences. [SDK tests](extensions/goals/workbench-sdk.test.ts): source-loaded extension, scripted provider, shell admission, checkpoints, reopen and passive completions. [PTY smoke](scripts/test_workbench_pty.mjs): actual TUI interaction without model calls. | No security sandbox, semantic proof, spending cap, detached-work cancellation, filesystem rollback, browser UI or phone-device certification. Full session switch/fork and multi-extension lifecycle matrices remain open. |
 | R/C anti-slop | [adapter](extensions/anti-slop/anti-slop.test.ts) and [R fixtures](scripts/test_anti_slop.R): skill-local analyzer resolution, repository-launcher delegation, grammar/config/error cases, structural rules, banned suppressed integer coercion, complexity boundary, literal-preserving equality, Jarl protocol fixtures. | Real-host command path, grammar/Jarl version matrix; no transitive dataflow or proof of semantic equivalence. |
 | Web search | [codex-web-search.test.ts](extensions/codex-web-search/codex-web-search.test.ts): injected auth/HTTP, citations, absent auth, empty query, unterminated SSE. | Response body byte cap is absent; need auth-cancellation, oversized-body, multiline SSE, and live provider checks. |
 | Biomedical search | [biomedical-evidence.test.ts](extensions/biomedical-evidence/biomedical-evidence.test.ts): injected provider responses, schemas, receipts, rate spacing, selected pagination/retry paths. | Each provider's malformed/cancelled response cases, pagination-origin policy, and opt-in live contract checks. |
@@ -85,14 +86,15 @@ unnecessary reads, missed invariants, test results, and host/model versions.
 
 1. **Completion delivery:** real SDK + scripted provider, covering consumed results,
    unread batches, silent mode, goals interaction, switch/reload, and no surviving
-   owned work after shutdown. Current spies can miss host ordering bugs.
+   owned work after shutdown. Workbench tests cover the paused notice path;
+   other paths still need host-ordering evidence.
 2. **Runtime and storage failure:** parent watchdog, process-tree death, worker
    failures, dead-owner recovery, and I/O faults. A green happy path cannot rule
    out a hang, orphan, or misleading terminal state.
 3. **Package and host compatibility:** clean tarball install/load of the vendored
    extension, worker and SQL assets, then explicit host/OS versions. Presence in
    an archive does not establish loadability.
-4. **UI and remote services:** component/PTY keyboard behavior; provider boundary
+4. **UI and remote services:** other dock components, physical phones and remote-client keyboard behavior; provider boundary
    failures and response limits. Keep real-service checks opt-in and identified.
 
 For each new scenario, add the assertion, gate, platform, and remaining limitation

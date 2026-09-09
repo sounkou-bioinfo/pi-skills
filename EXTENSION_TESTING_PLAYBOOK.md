@@ -38,7 +38,9 @@ npm run check                  # full local gate, not the default for each edit
 npm run test:background-tasks   # registry + fake-Pi tool integration, real shell jobs
 npm run test:completions        # queue and fake-Pi lifecycle
 npm run test:rlm                # worker, subprocess, store, and system-R regressions
-npm run test:memory             # includes goals tests
+npm run test:workbench          # goals, contract/view tests, offline real-SDK agent loops
+npm run test:workbench:pty      # tmux required; actual Pi CLI, isolated home and no model calls
+npm run test:memory             # native memory and projection tests
 npm run test:anti-slop          # tool adapter + native R/C analyzer fixtures
 npm run test:package            # doc links, declared assets, npm pack inventory
 ```
@@ -121,6 +123,11 @@ see [TEST_PLAN.md](TEST_PLAN.md) for the concrete scenarios still needed.
 
 - [Background tasks](scripts/test_background_tasks.ts): signal failures and
   status/log observations suppressing a pending completion notice.
+- [Workbench](extensions/goals/workbench-sdk.test.ts): isolated real Pi SDK,
+  source-loaded extensions, a scripted provider with no network calls, real shell
+  probes, checkpoint evidence, disk reopen, and completion/goal pause behavior.
+  [Contract/view tests](extensions/goals/workbench.test.ts) cover branch-local
+  authority, invalid input, proposal approval, and narrow Unicode terminal views.
 - [Completions](extensions/completions/completions.test.ts): both observation
   orders, bounded batches, wrong-session events, and shutdown.
 - [RLM](extensions/rlm/rlm.test.ts): post-`await` infinite loops, 200,000-character

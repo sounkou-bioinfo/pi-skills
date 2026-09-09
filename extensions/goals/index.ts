@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { readWorkbench, registerWorkbench, workbenchEvidence, workbenchPaused } from "./workbench.js";
 
 // Lightweight user-wide Pi reimplementation of Codex-style thread goals.
 // State is session-local and branch-aware via custom session entries.
@@ -157,6 +158,11 @@ export default function goalsExtension(pi: ExtensionAPI) {
 	let turnGoalContext: TurnGoalContext | undefined;
 	let suppressNextAutoContinue = false;
 
+	registerWorkbench(pi, (ctx) => {
+		reconstruct(ctx);
+		return goal ?? undefined;
+	});
+
 	function persist(state: GoalState | null, action: GoalEntry["action"] = "set") {
 		if (state) {
 			pi.appendEntry(CUSTOM_TYPE, { action, goal: cloneGoal(state) } satisfies GoalEntry);
@@ -187,6 +193,10 @@ export default function goalsExtension(pi: ExtensionAPI) {
 			return;
 		}
 		ctx.ui.setStatus("goals", `goal ${goal.status}: ${compact(goal.objective, 36)}`);
+		if (readWorkbench(ctx.sessionManager.getBranch())) {
+			ctx.ui.setWidget("goals", undefined);
+			return;
+		}
 		ctx.ui.setWidget("goals", [
 			`Goal ${goal.status}: ${compact(goal.objective, 100)}`,
 			`/goals pause|resume|complete|clear · auto ${goal.autoContinue ? "on" : "off"} · turns ${goal.continuationTurns}/${goal.maxContinuationTurns}`,
@@ -222,6 +232,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
 
 	function maybeQueueContinuation(ctx: ExtensionContext, reason: "start" | "followUp") {
 		if (!goal || goal.status !== "active" || !goal.autoContinue) return;
+		if (workbenchPaused(ctx.sessionManager.getBranch())) return;
 		if (goal.continuationTurns >= goal.maxContinuationTurns) {
 			goal.status = "budget_limited";
 			goal.updatedAt = nowIso();
@@ -402,8 +413,15 @@ export default function goalsExtension(pi: ExtensionAPI) {
 		parameters: Type.Object({}),
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 			reconstruct(ctx);
+			const branch = ctx.sessionManager.getBranch();
+			const workbench = readWorkbench(branch);
 			return {
-				content: [{ type: "text", text: renderGoal(goal) }],
+				content: [{ type: "text", text: [renderGoal(goal),
+					workbench ? JSON.stringify({
+						workbench,
+						evidence: workbenchEvidence(branch).slice(-12).map(({ output: _output, arguments: _args, ...item }) => item),
+					}) : "",
+				].filter(Boolean).join("\n") }],
 				details: { goal },
 			};
 		},

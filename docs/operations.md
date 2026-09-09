@@ -96,6 +96,21 @@ The semantic views follow [INCATools Semantic-SQL](https://github.com/INCATools/
 The summary hierarchy is independently implemented and inspired by
 [OptMem](https://github.com/VictorTaelin/OptMem); no OptMem source is included.
 
+## Shared terminal workbench
+
+`/workbench` adds an opt-in review envelope to the existing goal. The agent can
+`propose_contract`; the user reviews it with `/workbench contract` and grants a
+tool-admission allowance with `/workbench resume N`. Neither command starts a
+model turn. `record_checkpoint` links an agent report to retained tool-result
+entry IDs and pauses for review. `/workbench evidence` opens recorded output;
+it does not certify its interpretation.
+
+Pause blocks future tool admissions and this package's automatic continuations.
+It does not cancel admitted jobs, cover child-agent spending, or roll back files.
+State is session/branch-local and requires renewal after reopening or reloading.
+The [workbench guide](workbench.md) covers commands, limits, and phone access to
+the same VM session through SSH/tmux. No browser service is started.
+
 ## Auditing, context, and terminal behavior
 
 - `anti_slop` / `/anti-slop` scans tracked R/C files in a Git directory, or
