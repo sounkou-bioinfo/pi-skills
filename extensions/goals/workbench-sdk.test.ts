@@ -10,6 +10,7 @@ import { createAssistantMessageEventStream, InMemoryCredentialStore, type Assist
 import { createAgentSession, createEventBus, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { COMPLETION_READY } from "../completions/index.js";
 import { readWorkbench, workbenchEvidence } from "./workbench.js";
+import { readGoal } from "./state.js";
 
 const contract = {
   acceptance: "Observe independently specified file contents.", invariants: "Preserve input fixtures.",
@@ -61,7 +62,7 @@ async function sdk(root: string, frames: Frame[], sessionFile?: string) {
   const runtime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), authPath: join(root, "auth.json"), modelsPath: join(root, "models.json") });
   const { session } = await createAgentSession({
     cwd: root, agentDir: join(root, "agent"), resourceLoader: loader, sessionManager: manager, settingsManager: settings,
-    modelRuntime: runtime, tools: ["bash", "get_goal", "record_checkpoint", "propose_contract"], thinkingLevel: "off",
+    modelRuntime: runtime, tools: ["bash", "get_goal", "record_checkpoint", "propose_contract", "request_human_input", "update_goal"], thinkingLevel: "off",
     model: { id: "scripted", name: "Scripted offline fixture", provider: "workbench-test", api: "workbench-test", baseUrl: "http://127.0.0.1:1", reasoning: false, input: ["text"], cost, contextWindow: 100000, maxTokens: 1000 },
   });
   await session.bindExtensions({ mode: "print", onError: (error) => errors.push(error.error) });
@@ -159,6 +160,76 @@ test("completion notices remain visible without waking a paused real session", {
     await h.session.prompt("/workbench resume 2");
     await delay(180);
     assert.equal(h.requests(), 0, "observed completion must not become a deferred wake after renewal");
+    assert.deepEqual(h.errors, []);
+  } finally {
+    await h.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an ambiguous goal asks once, survives reopen, and cannot complete or wake without a human command", { timeout: 15000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-needs-input-sdk-"));
+  let h = await sdk(root, [
+    [call("question", "request_human_input", { question: "Did you mean to clear the goal or list a path?", reason: "The task is ambiguous." })],
+    [call("wrong-completion", "update_goal", { status: "complete", note: "A guessed command was attempted" })],
+  ]);
+  try {
+    await h.session.prompt("/goals ls clear --no-auto");
+    await h.session.prompt("/goals auto on");
+    await h.session.prompt("Continue the active goal.");
+    await h.session.waitForIdle();
+    assert.equal(h.requests(), 1, "requesting clarification must stop automatic continuation");
+    assert.equal(readWorkbench(h.manager.getBranch()), undefined, "no workbench contract is needed to pause");
+    assert.equal(readGoal(h.manager.getBranch())?.status, "needs_input");
+    await h.session.prompt("Continue again.");
+    assert.equal(h.requests(), 2, "an explicit prompt can discuss the hold but cannot execute tools");
+    assert.equal(readGoal(h.manager.getBranch())?.status, "needs_input");
+    assert.equal(readGoal(h.manager.getBranch())?.completedAt, undefined);
+    assert(workbenchEvidence(h.manager.getBranch()).some((item) => item.tool === "update_goal" && item.isError && /Needs your input/.test(item.output)));
+    h.bus.emit(COMPLETION_READY, { sessionId: h.manager.getSessionId(), key: "blocked:done", content: "A worker finished", wake: true });
+    await delay(180);
+    assert.equal(h.requests(), 2, "a completion must not restart a held goal without a workbench");
+    assert.equal(h.session.pendingMessageCount, 0);
+    const saved = h.manager.getSessionFile()!;
+    const id = readGoal(h.manager.getBranch())!.id;
+    await h.close();
+    h = await sdk(root, [], saved);
+    assert.equal(readGoal(h.manager.getBranch())?.status, "needs_input");
+    assert.equal(readGoal(h.manager.getBranch())?.id, id);
+    assert.equal(h.requests(), 0);
+    await h.session.prompt("/goals auto off");
+    assert.equal(readGoal(h.manager.getBranch())?.status, "needs_input");
+    const resumed = new Promise<void>((resolve) => {
+      const unsubscribe = h.session.subscribe((event) => {
+        if (event.type === "agent_end") { unsubscribe(); resolve(); }
+      });
+    });
+    await h.session.prompt("/goals resume Inspect the directory; do not clear anything.");
+    await resumed;
+    await h.session.waitForIdle();
+    assert.equal(h.requests(), 1);
+    assert.equal(readGoal(h.manager.getBranch())?.status, "active");
+    assert.equal(readGoal(h.manager.getBranch())?.inputRequest, undefined);
+    assert.deepEqual(h.errors, []);
+  } finally {
+    await h.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an exhausted work allowance still permits one authority-reducing input request", { timeout: 15000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-needs-input-allowance-"));
+  const h = await sdk(root, [
+    [call("status", "get_goal", {})],
+    [call("question", "request_human_input", { question: "Which evidence should decide this?", reason: "A human criterion is missing." })],
+  ]);
+  try {
+    await h.configure(1);
+    await h.session.prompt("Check the goal and ask for the missing criterion.");
+    assert.equal(h.requests(), 2);
+    assert.equal(readWorkbench(h.manager.getBranch())?.admissions, 1);
+    assert.equal(readWorkbench(h.manager.getBranch())?.phase, "paused");
+    assert.equal(readGoal(h.manager.getBranch())?.status, "needs_input");
     assert.deepEqual(h.errors, []);
   } finally {
     await h.close();

@@ -15,53 +15,88 @@ accessed through VS Code Remote-SSH. It does not start a web server.
    /goals Preserve genotype missingness and phase through the reader --no-auto
    ```
 
-2. Ask the agent to draft a contract with `propose_contract`. A proposal does
-   not change the approved contract, enable the gate, or grant new authority.
-   Existing project instructions still apply during drafting.
-3. Run `/workbench contract`. Review the proposal in Pi's multiline editor,
-   edit it, and save to approve. Escape cancels. The workbench is **paused**
-   after approval.
-4. Run `/workbench resume 20` to grant 20 tool admissions. Choose an allowance
-   appropriate to the task; 20 is an example, not a recommended universal limit.
-5. Send a prompt to begin the agreed work. Renewal itself does not invoke a
-   model or change the underlying goal's active/paused status.
+2. Ask the agent for a brief plan with `propose_contract`. A proposal does not
+   approve a contract or grant authority. Existing project instructions apply
+   during drafting.
+3. Open `/workbench` and review the plain-language task card:
+   - **Approve & start** approves this plan, grants the displayed work allowance,
+     activates the goal, and starts a model turn.
+   - **Change plan** opens a field picker and plain-text editor. Edits remain
+     local until approval.
+   - **Cancel** closes the card, discards local edits, and leaves authority
+     unchanged. Escape also cancels.
+   - **More** exposes the work limit and recorded evidence.
 
-The agent drafts; the user approves and renews. A materially different contract
-requires another explicit review. Both `/goals` and `/workbench` remain available
-while the workbench is paused.
+The default allowance is 20 tool calls, or the previous allowance for this goal.
+Choose a task-appropriate limit under More; it is not a spending cap. Approval
+preserves the goal's auto-continuation setting. A materially different plan
+requires another review. If the goal or contract changes while the card is open,
+review must restart; a stale card cannot approve different work.
+
+Use Space, Up/Down, or Page Up/Page Down to scroll. Decisions stay visible, with
+`a` for start, `e` for change, `m` for more, and `x` for cancel. Tab selects an
+action and Enter activates it. Start becomes available after the plan's end has
+been displayed. This is an opportunity to review, not proof of understanding.
+Both `/goals` and `/workbench` remain available while work is paused.
 
 The four contract fields are:
 
 | Field | Question |
 |---|---|
-| `acceptance` | What independent observation establishes success? |
-| `invariants` | What scientific, API, data, or architectural properties must survive? |
-| `autonomy` | Which decisions and actions may the agent take without asking? |
-| `escalation` | Which changes or uncertainties require human judgment? |
+| `acceptance` — What you'll get | What independent observation establishes success? |
+| `invariants` — What stays unchanged | What scientific, API, data, or architectural properties must survive? |
+| `autonomy` — I can do on my own | Which decisions and actions may the agent take without asking? |
+| `escalation` — I'll come back to you when | Which changes or uncertainties require human judgment? |
 
 The outcome comes from the goal rather than a separate workbench task list.
-Each field must contain 1–2000 characters. Non-interactive integrations can
-supply the same object with `/workbench contract {"acceptance":..., ...}`.
-Only these four fields are accepted. A host integration submitting commands
-must authenticate the human decision; a JSON object is not proof of approval.
+Each field must contain 1–2000 characters. For automation, `/workbench contract
+{"acceptance":..., ...}` accepts precisely these four fields and records an
+approved, **paused** contract. `/workbench resume N` grants an allowance without
+starting a model turn or activating a paused goal. Send a prompt separately to
+begin. A host integration submitting commands must authenticate the human
+decision; a JSON object is not proof of approval.
+
+## Needs your input
+
+When the goal is ambiguous or a consequential decision needs you, the agent can
+call `request_human_input` with one question and its reason. This sets the goal
+to **Needs your input**, even without a workbench contract. It stops this
+package's automatic continuation and completion-triggered wakes, and blocks
+new tool admissions. It does not mark the goal complete. Background notices
+remain visible; already admitted operations may finish.
+
+Open `/workbench`, review the question and any existing plan, then choose
+**Reply & start** and supply your answer. With no workbench plan, this resumes
+the existing goal without inventing a contract or granting an allowance.
+Alternatively, use `/goals resume <answer>`; if an existing workbench allowance
+is paused, use the card to renew it and answer together.
+
+A cancelled or empty reply leaves the hold in place. Ordinary chat, automatic
+follow-ups, `/goals auto on`, and `/workbench off` cannot clear the question.
+Only a human resume command/card action, replacement, clear, or explicit manual
+completion changes that decision. The agent cannot resume or mark a held goal
+complete. If no decision is needed, routine work continues under its existing
+authority; the workbench is optional.
 
 ## Inspect and steer
 
 | Command/tool | Effect |
 |---|---|
-| `/workbench` or `/workbench show` | Inspect the contract, allowance, pending amendment, and latest checkpoint. |
+| `/workbench` or `/workbench contract` | Open the task card; review, change, and start work. Completed goals open a read-only view with `/workbench`. |
+| `/workbench show` | Inspect the plan, pending amendment, question, and latest checkpoint without granting authority. |
 | `/workbench evidence` | Select a recent tool result in the TUI; list recent IDs in other modes. |
 | `/workbench evidence <entry-id>` | Open a particular tool-result entry on the current branch. |
 | `/workbench pause` | Stop future tool admissions, even during an active turn. |
 | `/workbench resume N` | While idle, grant a fresh allowance of 1–10000 admissions for the same unfinished goal. |
-| `/workbench off` | While idle, disable this envelope; normal host and goal behavior applies. |
+| `/workbench off` | While idle, disable this envelope; an outstanding goal input hold stays in place. |
+| `request_human_input` | Save one concrete question and reason; pause until the user decides. |
 | `propose_contract` | Record an agent proposal without approving it. |
 | `get_goal` | Include the active workbench and up to 12 recent evidence IDs in the tool response. |
 | `record_checkpoint` | Record a statement, existing evidence IDs, uncertainty, and next decision; pause for user review. |
 
-The read-only views support Up/Down, Page Up/Page Down, and Escape or `q`.
-The compact panel truncates to terminal width; opening the view reveals wrapped
-text. UI rendering removes terminal control sequences from source text.
+The read-only views support Up/Down, Space, Page Up/Page Down, and Escape or `q`.
+The compact panel truncates to terminal width; opening a full-screen card or
+view reveals wrapped text. UI rendering removes terminal control sequences from source text.
 Outside the TUI, inspection commands require an idle session so that reading a
 view does not enqueue steering. Display-only views are excluded from model
 context; the original tool results remain the evidence source.
@@ -88,9 +123,12 @@ complete or require approval of every routine edit.
 The gate reserves a slot at this extension's `tool_call` hook. Reaching the
 allowance pauses further admissions. Calls already admitted may finish,
 including sibling calls in the same batch. A call can consume a slot even if a
-later handler blocks it or execution fails. All tools are gated, including
-status tools and `record_checkpoint`; report a checkpoint before exhausting the
-allowance if one is needed.
+later handler blocks it or execution fails. Workbench-gated tools include status
+tools and `record_checkpoint`; report a checkpoint before exhausting the allowance
+if one is needed. `request_human_input` is an authority-reducing exception: it may
+record a question even after the allowance is exhausted, without consuming or
+renewing an admission. Once the goal needs input, all tools are blocked until a
+human explicitly resolves the hold.
 
 While paused, this package does not enqueue goal continuations. The completion
 batcher displays unread notices without waking the model; those displayed
@@ -112,15 +150,17 @@ Effective isolation and authentication remain host responsibilities.
 
 ## Persistence and recovery
 
-Contracts, admissions, proposals, and checkpoints are custom entries in Pi's
-session JSONL, reconstructed from the current branch. Evidence references point
+Contracts, admissions, proposals, checkpoints, and goal input requests are custom
+entries in Pi's session JSONL, reconstructed from the current branch. Evidence references point
 to existing tool-result entries; outputs are not copied into another evidence
 store. The active contract is injected as transient context rather than saved
 as repeated instruction messages.
 
 Opening, reloading, or navigating to a branch with a running envelope pauses it
 for user renewal. A checkpoint and its evidence IDs remain inspectable after
-reopening the saved session. Changing/completing the goal invalidates its tool
+reopening the saved session. An unanswered question remains paused on reopen;
+branch navigation reconstructs the question belonging to that branch.
+Changing/completing the goal invalidates its tool
 admissions; the user must review a contract for the current unfinished goal.
 
 This is conversation-state recovery, not filesystem rollback. Navigating a
@@ -153,6 +193,7 @@ Pi. Attaching to the same process does not reopen/reload the Pi session or reset
 its allowance. Existing work is not automatically migrated into tmux.
 
 The panel and views are width-tested. `npm run test:workbench:pty` exercises
-actual Pi commands, review scrolling, editor cancellation, input focus, and
-80/40-column resize in an isolated tmux server. A physical phone, its keyboard,
+actual Pi commands, review scrolling, plain-text editing, cancellation, input
+focus, approval/start, and a human-input hold/reply at 80/40 columns in an isolated
+tmux server. Its provider returns scripted responses without external requests. A physical phone, its keyboard,
 and its SSH client's escape-key behavior require a separate hands-on check.

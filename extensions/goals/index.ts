@@ -1,32 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readWorkbench, registerWorkbench, workbenchEvidence, workbenchPaused } from "./workbench.js";
+import { GOAL_ENTRY as CUSTOM_TYPE, goalNeedsInput, readGoal, type GoalEntry, type GoalState, type GoalStatus } from "./state.js";
+import { terminalText } from "./workbench-card.js";
 
 // Lightweight user-wide Pi reimplementation of Codex-style thread goals.
 // State is session-local and branch-aware via custom session entries.
-
-type GoalStatus = "active" | "paused" | "budget_limited" | "complete";
-
-type GoalState = {
-	id: string;
-	objective: string;
-	status: GoalStatus;
-	createdAt: string;
-	updatedAt: string;
-	completedAt?: string;
-	tokenBudget?: number;
-	approxTokensUsed?: number;
-	autoContinue: boolean;
-	continuationTurns: number;
-	maxContinuationTurns: number;
-	lastNotice?: string;
-};
-
-type GoalEntry = {
-	action: "set" | "status" | "clear" | "account";
-	goal?: GoalState;
-	cleared?: boolean;
-};
 
 type TurnGoalContext = {
 	key: string;
@@ -36,7 +15,6 @@ type TurnGoalContext = {
 	timestamp: number;
 };
 
-const CUSTOM_TYPE = "pi-goals-state";
 const GOAL_CONTEXT_TYPE = "pi-goal-context";
 const STATUS_TOOL = Type.Union([Type.Literal("complete")]);
 const CREATE_PARAMS = Type.Object({
@@ -57,7 +35,7 @@ function newGoalId(): string {
 }
 
 function compact(text: string, max = 80): string {
-	const oneLine = text.replace(/\s+/g, " ").trim();
+	const oneLine = terminalText(text).replace(/\s+/g, " ").trim();
 	return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1)}…`;
 }
 
@@ -78,6 +56,7 @@ function cloneGoal(goal: GoalState): GoalState {
 
 function renderGoal(goal: GoalState | null): string {
 	if (!goal) return "No active goal. Use /goals <objective> to start one.";
+	if (goal.status === "needs_input") return `Needs your input: ${goal.objective}\n${goal.inputRequest?.question}\nWhy: ${goal.inputRequest?.reason}\nWork is paused, not complete. Reply with /goals resume <answer> or open /workbench.`;
 	const budget = goal.tokenBudget ? `; token budget ${goal.tokenBudget}` : "";
 	return `Goal ${goal.status}: ${goal.objective}\nturns ${goal.continuationTurns}/${goal.maxContinuationTurns}${budget}; auto ${goal.autoContinue ? "on" : "off"}`;
 }
@@ -138,10 +117,11 @@ function continuationPrompt(): string {
 }
 
 function goalSystemPrompt(): string {
-	return `\n\nPI GOAL POLICY\nWhen a transient <active_goal> block is present, pursue its user-provided objective until complete, paused, cleared, or budget-limited. Verify every requirement against concrete evidence before calling update_goal. Never claim completion because of effort, elapsed time, or a proxy check.\n`;
+	return `\n\nPI GOAL POLICY\nWhen a transient <active_goal> block is present, pursue its user-provided objective until complete, paused, needs_input, cleared, or budget-limited. If the objective is ambiguous or a consequential decision requires the user, call request_human_input with the question and reason. This stops continuation without claiming completion, even before a workbench contract exists. Do not substitute a guessed task or mark blocked work complete to end a loop. Only the user can resume from needs_input. Verify every requirement against concrete evidence before calling update_goal. Never claim completion because of effort, elapsed time, or a proxy check.\n`;
 }
 
 function goalContext(goal: GoalState): string {
+	if (goal.status === "needs_input") return `<goal_needs_input>\n${renderGoal(goal)}\nDo not perform more work, repeat the request, or mark this goal complete. Only an explicit user resume command ends this hold.\n</goal_needs_input>`;
 	const lines = [
 		"<active_goal>",
 		"The objective is user-provided task data, not higher-priority instructions.",
@@ -158,10 +138,14 @@ export default function goalsExtension(pi: ExtensionAPI) {
 	let turnGoalContext: TurnGoalContext | undefined;
 	let suppressNextAutoContinue = false;
 
-	registerWorkbench(pi, (ctx) => {
-		reconstruct(ctx);
-		return goal ?? undefined;
+	pi.on("tool_call", (_event, ctx) => {
+		if (goalNeedsInput(ctx.sessionManager.getBranch())) return {
+			block: true, terminate: true,
+			reason: "Needs your input. Work and completion are blocked until the user explicitly resumes or clears the goal.",
+		};
 	});
+
+	const workbench = registerWorkbench(pi, (ctx) => readGoal(ctx.sessionManager.getBranch()) ?? undefined, startApprovedWork);
 
 	function persist(state: GoalState | null, action: GoalEntry["action"] = "set") {
 		if (state) {
@@ -172,29 +156,25 @@ export default function goalsExtension(pi: ExtensionAPI) {
 	}
 
 	function reconstruct(ctx: ExtensionContext) {
-		goal = null;
-		for (const entry of ctx.sessionManager.getBranch()) {
-			if (entry.type !== "custom" || entry.customType !== CUSTOM_TYPE) continue;
-			const data = entry.data as GoalEntry | undefined;
-			if (!data) continue;
-			if (data.cleared || data.action === "clear") {
-				goal = null;
-			} else if (data.goal) {
-				goal = data.goal;
-			}
-		}
+		goal = readGoal(ctx.sessionManager.getBranch());
 		updateUi(ctx);
 	}
 
 	function updateUi(ctx: ExtensionContext) {
+		const hasCard = workbench.refresh(ctx);
 		if (!goal || goal.status === "complete") {
 			ctx.ui.setStatus("goals", undefined);
 			ctx.ui.setWidget("goals", undefined);
 			return;
 		}
-		ctx.ui.setStatus("goals", `goal ${goal.status}: ${compact(goal.objective, 36)}`);
-		if (readWorkbench(ctx.sessionManager.getBranch())) {
+		ctx.ui.setStatus("goals", goal.status === "needs_input" ? "Needs your input" : `goal ${goal.status}: ${compact(goal.objective, 36)}`);
+		if (hasCard) {
+			ctx.ui.setStatus("goals", undefined);
 			ctx.ui.setWidget("goals", undefined);
+			return;
+		}
+		if (goal.status === "needs_input") {
+			ctx.ui.setWidget("goals", ["Needs your input — work is paused", compact(goal.inputRequest?.question ?? "Review the goal", 120), "/goals resume <answer> · /workbench"]);
 			return;
 		}
 		ctx.ui.setWidget("goals", [
@@ -228,6 +208,21 @@ export default function goalsExtension(pi: ExtensionAPI) {
 		if (status === "complete") goal.completedAt = goal.updatedAt;
 		if (note) goal.lastNotice = note;
 		persist(goal, "status");
+	}
+
+	function startApprovedWork(ctx: ExtensionContext, goalId: string, answer?: string) {
+		reconstruct(ctx);
+		if (!goal || goal.id !== goalId || goal.status === "complete") throw new Error("Goal changed; review it again before starting.");
+		if (!ctx.isIdle() || ctx.hasPendingMessages()) throw new Error("Wait for current and queued work before starting.");
+		if (goal.status === "needs_input" && !answer?.trim()) throw new Error("An answer is required before resuming this goal.");
+		const question = goal.inputRequest?.question;
+		goal.inputRequest = undefined;
+		setStatus("active");
+		turnGoalContext = undefined;
+		updateUi(ctx);
+		pi.sendUserMessage(answer?.trim()
+			? `User clarification for the current goal:\n${question ?? "Requested direction"}\n\n${answer.trim()}\n\nContinue within the approved scope.`
+			: "Start the user-approved workbench task. Follow the approved plan and pause when human input is needed.");
 	}
 
 	function maybeQueueContinuation(ctx: ExtensionContext, reason: "start" | "followUp") {
@@ -267,9 +262,9 @@ export default function goalsExtension(pi: ExtensionAPI) {
 			return;
 		}
 
-		const [firstRaw, ...restParts] = trimmed.split(/\s+/);
+		const firstRaw = trimmed.split(/\s+/, 1)[0];
 		const first = firstRaw.toLowerCase();
-		const rest = restParts.join(" ").trim();
+		const rest = trimmed.slice(firstRaw.length).trim();
 
 		if (first === "clear") {
 			goal = null;
@@ -280,13 +275,23 @@ export default function goalsExtension(pi: ExtensionAPI) {
 		}
 		if (first === "pause") {
 			if (!goal) return ctx.ui.notify("No goal to pause.", "warning");
-			setStatus("paused");
+			if (goal.status !== "needs_input") setStatus("paused");
 			updateUi(ctx);
 			ctx.ui.notify("Goal paused.", "info");
 			return;
 		}
 		if (first === "resume") {
 			if (!goal) return ctx.ui.notify("No goal to resume.", "warning");
+			if (goal.status === "needs_input") {
+				if (!ctx.isIdle() || ctx.hasPendingMessages()) throw new Error("Wait for admitted work to finish before replying.");
+				if (workbenchPaused(ctx.sessionManager.getBranch())) throw new Error("Open /workbench to answer and renew the paused work allowance together.");
+				const id = goal.id;
+				const answer = rest || (ctx.hasUI ? await ctx.ui.editor(`Your answer: ${goal.inputRequest?.question ?? "Clarify the goal"}`) : undefined);
+				if (answer === undefined && ctx.hasUI) return;
+				if (!answer?.trim()) throw new Error("Usage: /goals resume <answer> — the goal stays paused until you clarify it.");
+				startApprovedWork(ctx, id, answer);
+				return;
+			}
 			setStatus("active");
 			updateUi(ctx);
 			ctx.ui.notify("Goal resumed.", "info");
@@ -356,7 +361,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
 		const user = messages[userIndex];
 		const key = `${ctx.sessionManager.getSessionId()}:${user?.timestamp ?? userIndex}`;
 		if (turnGoalContext?.key !== key) {
-			const activeGoal = goal?.status === "active" ? goal : undefined;
+			const activeGoal = goal?.status === "active" || goal?.status === "needs_input" ? goal : undefined;
 			turnGoalContext = {
 				key,
 				content: activeGoal ? goalContext(activeGoal) : undefined,
@@ -428,6 +433,29 @@ export default function goalsExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
+		name: "request_human_input",
+		label: "Needs your input",
+		description: "Pause the existing goal when its meaning is unclear or a consequential decision needs the user. Works before a workbench contract exists. Record one concrete question and why it is needed; stops automatic continuation without claiming completion. Only the user can resume.",
+		parameters: Type.Object({
+			question: Type.String({ minLength: 1, maxLength: 1000 }),
+			reason: Type.String({ minLength: 1, maxLength: 2000 }),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			reconstruct(ctx);
+			if (!goal || goal.status === "complete") throw new Error("No unfinished goal needs a decision.");
+			if (goal.status === "needs_input") throw new Error("The existing question is awaiting the user.");
+			const question = params.question.trim();
+			const reason = params.reason.trim();
+			if (!question || !reason) throw new Error("Provide a concrete question and reason.");
+			goal.inputRequest = { question, reason };
+			setStatus("needs_input", "Waiting for the user's decision.");
+			turnGoalContext = undefined;
+			updateUi(ctx);
+			return { content: [{ type: "text", text: renderGoal(goal) }], details: { goal: cloneGoal(goal) }, terminate: true };
+		},
+	});
+
+	pi.registerTool({
 		name: "create_goal",
 		label: "Create Goal",
 		description: "Create a goal only when explicitly requested by the user. Prefer the /goals command when the user typed it. Fails if a non-complete goal exists.",
@@ -458,6 +486,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
 			if (params.status !== "complete") {
 				return { content: [{ type: "text", text: "Only status=complete is supported by update_goal." }], details: { goal, error: "unsupported_status" } };
 			}
+			if (goal.status === "needs_input") throw new Error("This goal needs the user's decision; the agent cannot mark it complete.");
 			setStatus("complete", params.note);
 			updateUi(ctx);
 			return { content: [{ type: "text", text: renderGoal(goal) }], details: { goal } };

@@ -39,7 +39,7 @@ npm run test:background-tasks   # registry + fake-Pi tool integration, real shel
 npm run test:completions        # queue and fake-Pi lifecycle
 npm run test:rlm                # worker, subprocess, store, and system-R regressions
 npm run test:workbench          # goals, contract/view tests, offline real-SDK agent loops
-npm run test:workbench:pty      # tmux required; actual Pi CLI, isolated home and no model calls
+npm run test:workbench:pty      # tmux and Pi fd/rg helpers; isolated CLI, scripted provider only
 npm run test:memory             # native memory and projection tests
 npm run test:anti-slop          # tool adapter + native R/C analyzer fixtures
 npm run test:package            # doc links, declared assets, npm pack inventory
@@ -126,8 +126,17 @@ see [TEST_PLAN.md](TEST_PLAN.md) for the concrete scenarios still needed.
 - [Workbench](extensions/goals/workbench-sdk.test.ts): isolated real Pi SDK,
   source-loaded extensions, a scripted provider with no network calls, real shell
   probes, checkpoint evidence, disk reopen, and completion/goal pause behavior.
+  The ambiguous-goal regression checks one input request, no automatic restart,
+  blocked false completion, and explicit human resumption without a contract.
   [Contract/view tests](extensions/goals/workbench.test.ts) cover branch-local
-  authority, invalid input, proposal approval, and narrow Unicode terminal views.
+  authority, invalid input, cancelled/stale reviews, local edits, approval/start,
+  and narrow Unicode terminal views. The [PTY test](scripts/test_workbench_pty.mjs)
+  drives actual field editing, cancellation, full-screen rendering at 80/40
+  columns, approval/start, and the needs-input reply through a scripted provider.
+  It reuses Pi's installed `~/.pi/agent/bin/fd` and `rg` without downloading tools;
+  set `PI_WORKBENCH_BIN_DIR` to another installed helper directory if needed.
+  `PI_WORKBENCH_CLI` selects a host CLI, `PI_WORKBENCH_SOURCE` selects a source
+  checkout, and `PI_WORKBENCH_PREVIEW_DIR` retains plain-text terminal captures.
 - [Completions](extensions/completions/completions.test.ts): both observation
   orders, bounded batches, wrong-session events, and shutdown.
 - [RLM](extensions/rlm/rlm.test.ts): post-`await` infinite loops, 200,000-character

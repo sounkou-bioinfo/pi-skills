@@ -4,6 +4,8 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import goalsExtension from "./index.js";
 import { parseContract, readWorkbench, WORKBENCH_ENTRY, workbenchEvidence, WorkbenchView, workbenchWidget } from "./workbench.js";
+import { readGoal } from "./state.js";
+import { planText, WorkbenchCard, type CardAction } from "./workbench-card.js";
 
 const contract = {
   acceptance: "Pinned fixture preserves missingness and phase.",
@@ -21,12 +23,15 @@ function harness() {
   const widgets = new Map<string, any>();
   let idle = true;
   let editor: string | undefined;
+  const actions: CardAction[] = [];
+  const selections: string[] = [];
   const ctx: any = {
     mode: "print", hasUI: false, sessionManager: manager, isIdle: () => idle,
-    getContextUsage: () => undefined,
+    getContextUsage: () => undefined, hasPendingMessages: () => false,
     ui: {
       notify() {}, setStatus() {}, setWidget: (key: string, value: any) => widgets.set(key, value),
       editor: async () => editor, confirm: async () => true,
+      custom: async () => actions.shift(), select: async () => selections.shift(), input: async () => undefined,
     },
   };
   goalsExtension({
@@ -38,7 +43,7 @@ function harness() {
     sendMessage: (...args: any[]) => sent.push(args),
   } as any);
   return {
-    manager, ctx, sent, widgets,
+    manager, ctx, sent, widgets, actions, selections,
     state: () => readWorkbench(manager.getBranch()),
     setIdle: (value: boolean) => { idle = value; },
     setEditor: (value: string | undefined) => { editor = value; },
@@ -46,8 +51,12 @@ function harness() {
     tool: (name: string, params: unknown = {}) => tools.get(name).execute("test-call", params, undefined, undefined, ctx),
     async emit(name: string, event: unknown = {}) {
       const results = [];
-      for (const hook of hooks.get(name) ?? []) results.push(await hook(event, ctx));
-      return results;
+      for (const hook of hooks.get(name) ?? []) {
+        const result = await hook(event, ctx);
+        if (name === "tool_call" && result?.block) return [result];
+        results.push(result);
+      }
+      return name === "tool_call" ? [undefined] : results;
     },
   };
 }
@@ -79,9 +88,7 @@ test("a proposal changes neither approved authority nor goal status", async () =
   assert.equal(h.state(), undefined);
   await h.command("workbench", "show");
   assert.match(h.sent.at(-1)[0].content, /Agent proposal \(not authority\)/);
-  h.ctx.hasUI = true;
-  h.setEditor(JSON.stringify(contract));
-  await h.command("workbench", "contract");
+  await h.command("workbench", `contract ${JSON.stringify(contract)}`);
   assert.equal(h.state()?.phase, "paused");
   await h.command("workbench", "resume 8");
   await h.tool("propose_contract", { ...contract, autonomy: "Different proposed scope" });
@@ -97,7 +104,7 @@ test("command approval preserves significant whitespace inside contract values",
   assert.deepEqual(h.state()?.contract, exact);
 });
 
-test("contract approval and user renewal never start a model turn", async () => {
+test("advanced contract JSON and resume N commands do not start a model turn", async () => {
   const h = await configured();
   assert.equal(h.state()?.phase, "paused");
   assert.equal(h.sent.length, 0);
@@ -225,7 +232,8 @@ test("invalid renewals and cancelled editing leave authority unchanged", async (
     await assert.rejects(h.command("workbench", args));
   }
   h.ctx.hasUI = true;
-  h.setEditor(undefined);
+  h.ctx.mode = "tui";
+  h.actions.push("cancel");
   await h.command("workbench", "contract");
   assert.equal(h.state()?.allowance, 0);
   await h.command("workbench", "off");
@@ -277,6 +285,182 @@ test("contract context is current, transient and absent after disabling the enve
   await h.command("workbench", "off");
   const [disabled] = await h.emit("context", { messages: next.messages });
   assert(!disabled.messages.some((message: any) => message.customType === "pi-workbench-contract"));
+});
+
+test("the task card uses plain language, pins decisions and requires the plan end to be exposed", () => {
+  const model = { objective: "Inspect the directory", contract, allowance: 20 };
+  assert.doesNotMatch(planText(model), /"acceptance"|"invariants"/);
+  const chosen: CardAction[] = [];
+  const card = new WorkbenchCard(model, () => 18, (action) => chosen.push(action));
+  const first = card.render(40);
+  assert(first.some((line) => line.includes("Approve & start")));
+  assert(first.some((line) => line.includes("Change plan")));
+  assert(first.some((line) => line.includes("Cancel")));
+  card.handleInput("a");
+  assert.deepEqual(chosen, [], "approval stays disabled while part of the plan is hidden");
+  for (let i = 0; i < 30; i++) { card.handleInput(" "); card.render(40); }
+  card.handleInput("a");
+  assert.deepEqual(chosen, ["start"]);
+  card.handleInput("a");
+  assert.deepEqual(chosen, ["start"], "a decision is submitted once");
+  for (const width of [1, 8, 20, 40, 80]) for (const height of [3, 10, 18]) {
+    const small = new WorkbenchCard({ ...model, objective: "\x1b]52;c;eA==\x07研究🧬" }, () => height, () => {});
+    const lines = small.render(width);
+    assert(lines.length <= height);
+    assert(lines.every((line) => visibleWidth(line) <= width));
+    assert(lines.every((line) => !line.includes("\x1b]52")));
+  }
+  const cancelled: CardAction[] = [];
+  const dismiss = new WorkbenchCard(model, () => 18, (action) => cancelled.push(action));
+  dismiss.handleInput("\x1b");
+  assert.deepEqual(cancelled, ["cancel"]);
+});
+
+test("Approve and start grants the reviewed plan and starts exactly one user turn", async () => {
+  const h = harness();
+  await h.command("goals", "Inspect the directory --no-auto");
+  await h.tool("propose_contract", contract);
+  h.ctx.mode = "tui";
+  h.ctx.hasUI = true;
+  h.actions.push("start");
+  await h.command("workbench");
+  assert.deepEqual(h.state()?.contract, contract);
+  assert.equal(h.state()?.phase, "running");
+  assert.equal(h.state()?.allowance, 20);
+  assert.equal(h.sent.length, 1);
+  assert.match(h.sent[0][0], /Start the user-approved/);
+});
+
+test("plan edits are local until approval and Cancel preserves existing authority", async () => {
+  const h = await configured();
+  h.ctx.mode = "tui";
+  h.ctx.hasUI = true;
+  h.actions.push("change", "cancel");
+  h.selections.push("What you'll get");
+  h.setEditor("A different acceptance criterion.");
+  await h.command("workbench");
+  assert.deepEqual(h.state()?.contract, contract);
+  assert.equal(h.state()?.allowance, 0);
+  assert.equal(h.sent.length, 0);
+  h.actions.push("change", "start");
+  h.selections.push("What you'll get");
+  await h.command("workbench");
+  assert.equal(h.state()?.contract.acceptance, "A different acceptance criterion.");
+  assert.equal(h.sent.length, 1);
+});
+
+test("starting an unchanged plan preserves its latest checkpoint and evidence references", async () => {
+  const h = await configured();
+  await h.command("workbench", "resume 3");
+  const report = { statement: "The next step needs a scope decision.", evidenceIds: [result(h.manager)], uncertainty: "Only one fixture is recorded.", nextDecision: "Approve the existing plan." };
+  await h.tool("record_checkpoint", report);
+  h.ctx.mode = "tui";
+  h.ctx.hasUI = true;
+  h.actions.push("start");
+  await h.command("workbench");
+  assert.deepEqual(h.state()?.checkpoint, report);
+  assert.equal(h.state()?.phase, "running");
+  assert.equal(h.state()?.allowance, 3);
+  assert.equal(h.sent.length, 1);
+});
+
+test("a stale task card cannot approve a different goal or pending work", async () => {
+  const h = await configured();
+  h.ctx.mode = "tui";
+  h.ctx.hasUI = true;
+  h.ctx.ui.custom = async () => {
+    await h.command("goals", "A different task --no-auto");
+    return "start";
+  };
+  await assert.rejects(h.command("workbench"), /task changed during review/);
+  assert.equal(h.state()?.allowance, 0);
+  assert.equal(h.sent.length, 0);
+  h.ctx.hasPendingMessages = () => true;
+  await assert.rejects(h.command("workbench"), /wait for current operations/);
+});
+
+test("needs_input stops the ambiguous-goal loop before a workbench plan exists", async () => {
+  const h = harness();
+  await h.command("goals", "ls clear --no-auto");
+  await h.command("goals", "auto on");
+  const id = readGoal(h.manager.getBranch())!.id;
+  const user = { role: "user", content: "Continue", timestamp: 1 };
+  await h.emit("context", { messages: [user] });
+  const response = await h.tool("request_human_input", { question: "Did you mean to clear the goal or list a path?", reason: "The intended task is ambiguous." });
+  assert.equal(response.terminate, true);
+  assert.equal(readGoal(h.manager.getBranch())?.status, "needs_input");
+  assert.equal(readGoal(h.manager.getBranch())?.id, id);
+  assert.equal(readGoal(h.manager.getBranch())?.completedAt, undefined);
+  await h.emit("agent_end");
+  await h.emit("agent_end");
+  await h.command("goals", "pause");
+  await h.command("goals", "auto on");
+  await h.emit("input", { text: "Continue the active goal", source: "extension" });
+  assert.equal(h.sent.length, 0);
+  assert.equal(readGoal(h.manager.getBranch())?.continuationTurns, 0);
+  const [block] = await h.emit("tool_call", { toolName: "update_goal", toolCallId: "attempt" });
+  assert.equal(block.block, true);
+  await assert.rejects(h.tool("update_goal", { status: "complete" }), /cannot mark it complete/);
+  await assert.rejects(h.tool("request_human_input", { question: "Another question", reason: "Replace it" }), /existing question/);
+  const contexts = await h.emit("context", { messages: [user] });
+  assert.match(JSON.stringify(contexts), /goal_needs_input/);
+  await assert.rejects(h.command("goals", "resume"), /answer/);
+  assert.equal(readGoal(h.manager.getBranch())?.status, "needs_input");
+  await h.command("goals", "resume Inspect the directory; do not clear anything.");
+  assert.equal(readGoal(h.manager.getBranch())?.status, "active");
+  assert.equal(readGoal(h.manager.getBranch())?.inputRequest, undefined);
+  assert.equal(h.sent.length, 1);
+  assert.match(h.sent[0][0], /Inspect the directory; do not clear anything/);
+});
+
+test("input holds persist without mutating the earlier branch and survive an exhausted allowance", async () => {
+  const h = await configured();
+  const prior = h.manager.getLeafId()!;
+  const request = { question: "Which comparison is intended?", reason: "The scope is unresolved." };
+  assert.deepEqual(await h.emit("tool_call", { toolName: "request_human_input", toolCallId: "hold" }), [undefined]);
+  await h.tool("request_human_input", request);
+  assert.equal(h.state()?.admissions, 0, "requesting a pause does not consume or renew work authority");
+  const held = h.manager.getLeafId()!;
+  await h.emit("session_start");
+  await h.emit("agent_end");
+  assert.equal(h.sent.length, 0);
+  assert.deepEqual(readGoal(h.manager.getBranch())?.inputRequest, request);
+  h.manager.branch(prior);
+  assert.equal(readGoal(h.manager.getBranch())?.status, "active", "the stored earlier state is immutable");
+  h.manager.branch(held);
+  await h.emit("session_tree");
+  assert.equal(readGoal(h.manager.getBranch())?.status, "needs_input");
+  await h.command("workbench", "off");
+  const [block] = await h.emit("tool_call", { toolName: "bash", toolCallId: "after-off" });
+  assert.equal(block.block, true, "turning off a workbench envelope does not answer the outstanding question");
+});
+
+test("clearing an input-held goal does not present it as active work", async () => {
+  const h = await configured();
+  h.ctx.mode = "tui";
+  h.ctx.hasUI = true;
+  await h.command("workbench", "resume 3");
+  await h.tool("request_human_input", { question: "Which directory?", reason: "The path is ambiguous." });
+  await h.command("goals", "clear");
+  assert.equal(readGoal(h.manager.getBranch()), null);
+  const lines = h.widgets.get("pi-workbench")().render(40).join("\n");
+  assert.match(lines, /No goal is set/);
+  assert.doesNotMatch(lines, /Working|Needs your input/);
+});
+
+test("the reply card resumes a goal without inventing a workbench contract", async () => {
+  const h = harness();
+  await h.command("goals", "Clarify the task --no-auto");
+  await h.tool("request_human_input", { question: "Which directory?", reason: "Two paths are possible." });
+  h.ctx.mode = "tui";
+  h.ctx.hasUI = true;
+  h.actions.push("start");
+  h.setEditor("Only the current directory.");
+  await h.command("workbench");
+  assert.equal(readGoal(h.manager.getBranch())?.status, "active");
+  assert.equal(h.state(), undefined);
+  assert.equal(h.sent.length, 1);
+  assert.match(h.sent[0][0], /Only the current directory/);
 });
 
 test("unknown persisted workbench events fail explicitly", () => {

@@ -99,11 +99,19 @@ The summary hierarchy is independently implemented and inspired by
 ## Shared terminal workbench
 
 `/workbench` adds an opt-in review envelope to the existing goal. The agent can
-`propose_contract`; the user reviews it with `/workbench contract` and grants a
-tool-admission allowance with `/workbench resume N`. Neither command starts a
-model turn. `record_checkpoint` links an agent report to retained tool-result
+`propose_contract`; the user opens `/workbench` for a plain-language card with
+**Approve & start**, **Change plan**, and **Cancel**. Approval grants the displayed
+tool-call allowance and starts a turn. More exposes limits and evidence. The
+advanced `contract JSON` and `resume N` commands remain separate, non-starting
+operations. `record_checkpoint` links an agent report to retained tool-result
 entry IDs and pauses for review. `/workbench evidence` opens recorded output;
 it does not certify its interpretation.
+
+`request_human_input` records a concrete question and reason on the existing goal,
+even before a workbench contract exists. **Needs your input** blocks new tool
+admissions, automatic goal continuation, and completion-triggered wakes without
+claiming completion. The user answers through `/workbench` or `/goals resume
+<answer>`; ordinary chat does not clear the hold. The question survives reopening.
 
 Pause blocks future tool admissions and this package's automatic continuations.
 It does not cancel admitted jobs, cover child-agent spending, or roll back files.

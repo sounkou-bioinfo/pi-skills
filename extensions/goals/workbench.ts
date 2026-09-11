@@ -1,13 +1,14 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { stripVTControlCharacters } from "node:util";
 import { Type } from "typebox";
+import { PLAN_LABELS, planText, terminalText, WorkbenchCard, type CardAction } from "./workbench-card.js";
+import type { GoalState } from "./state.js";
 
 export const WORKBENCH_ENTRY = "pi-workbench-v1";
 const CONTRACT_FIELDS = ["acceptance", "invariants", "autonomy", "escalation"] as const;
 const PROPOSAL_ENTRY = "pi-workbench-proposal-v1";
 export type WorkbenchContract = Record<(typeof CONTRACT_FIELDS)[number], string>;
-type Goal = { id: string; objective: string; status: string };
+type Goal = Pick<GoalState, "id" | "objective" | "status" | "inputRequest">;
 type Checkpoint = { statement: string; evidenceIds: string[]; uncertainty: string; nextDecision: string };
 type WorkbenchEvent =
   | { kind: "contract"; goalId: string; objective: string; contract: WorkbenchContract }
@@ -78,16 +79,12 @@ export function parseContract(text: string): WorkbenchContract {
   return Object.fromEntries(CONTRACT_FIELDS.map((field) => [field, (record[field] as string).trim()])) as WorkbenchContract;
 }
 
-function terminalText(text: string): string {
-  return stripVTControlCharacters(text).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
-}
-
 export function workbenchWidget(state: WorkbenchState, width: number): string[] {
   return [
-    `Workbench ${state.phase.toUpperCase()} · ${state.admissions}/${state.allowance} tool admissions`,
-    `Question: ${state.objective}`,
+    `${state.phase === "running" ? "Working" : "Work paused"} · ${state.admissions}/${state.allowance} tool calls`,
+    state.objective,
     state.checkpoint ? `Agent report: ${state.checkpoint.statement}` : state.reason,
-    "/workbench show · evidence · pause · resume N",
+    "/workbench to review · /workbench pause",
   ].map((line) => truncateToWidth(terminalText(line).replace(/\s+/g, " "), Math.max(1, width)));
 }
 
@@ -100,15 +97,16 @@ export class WorkbenchView {
     if (matchesKey(data, "escape") || data === "q") this.done();
     else if (matchesKey(data, "up")) this.offset = Math.max(0, this.offset - 1);
     else if (matchesKey(data, "down")) this.offset++;
-    else if (matchesKey(data, "pageUp")) this.offset = Math.max(0, this.offset - this.height());
-    else if (matchesKey(data, "pageDown")) this.offset += this.height();
+    else if (matchesKey(data, "pageUp")) this.offset = Math.max(0, this.offset - Math.max(1, this.height() - 1));
+    else if (matchesKey(data, "pageDown") || data === " ") this.offset += Math.max(1, this.height() - 1);
   }
   render(width: number): string[] {
     width = Math.max(1, width);
     const lines = wrapTextWithAnsi(terminalText(this.text), width);
     const height = Math.max(1, this.height() - 1);
     this.offset = Math.min(this.offset, Math.max(0, lines.length - height));
-    return [...lines.slice(this.offset, this.offset + height), "↑↓ scroll · PgUp/PgDn · Esc close"]
+    const page = lines.slice(this.offset, this.offset + height);
+    return [...page, ...Array(height - page.length).fill(""), "↑↓/Space scroll · Esc close"]
       .map((line) => truncateToWidth(line, width));
   }
 }
@@ -134,7 +132,11 @@ export function workbenchEvidence(branch: readonly SessionEntry[], id?: string) 
     }));
 }
 
-export function registerWorkbench(pi: ExtensionAPI, currentGoal: (ctx: ExtensionContext) => Goal | undefined) {
+export function registerWorkbench(
+  pi: ExtensionAPI,
+  currentGoal: (ctx: ExtensionContext) => Goal | undefined,
+  startApprovedWork: (ctx: ExtensionContext, goalId: string, answer?: string) => void,
+) {
   function proposal(ctx: ExtensionContext): WorkbenchContract | undefined {
     const goalId = currentGoal(ctx)?.id;
     const branch = ctx.sessionManager.getBranch();
@@ -151,14 +153,27 @@ export function registerWorkbench(pi: ExtensionAPI, currentGoal: (ctx: Extension
   function refresh(ctx: ExtensionContext) {
     const state = readWorkbench(ctx.sessionManager.getBranch());
     const pending = proposal(ctx);
+    const goal = currentGoal(ctx);
+    const visible = Boolean(state || pending);
     if (ctx.mode === "tui") {
-      ctx.ui.setWidget("pi-workbench", state || pending ? () => ({
-        render: (width) => state ? [...workbenchWidget(state, width),
-          ...(pending ? [truncateToWidth("Amendment proposed · /workbench contract", Math.max(1, width))] : [])]
-          : [truncateToWidth("Contract PROPOSED · /workbench contract to review", Math.max(1, width))],
+      ctx.ui.setWidget("pi-workbench", visible ? () => ({
+        render: (width) => !goal
+          ? ["No goal is set", "/goals <objective> --no-auto", "/workbench evidence"].map((line) => truncateToWidth(line, Math.max(1, width)))
+          : goal.status === "needs_input"
+          ? ["Needs your input — work paused", goal.inputRequest?.question ?? "Review the task", "/workbench to reply"].map((line) => truncateToWidth(terminalText(line).replace(/\s+/g, " "), Math.max(1, width)))
+          : goal?.status === "complete" ? ["Task marked complete", goal.objective, "/workbench show · /workbench evidence"].map((line) => truncateToWidth(terminalText(line).replace(/\s+/g, " "), Math.max(1, width)))
+          : state && goal && state.goalId !== goal.id ? ["This goal needs a plan", goal.objective, "/workbench to review"].map((line) => truncateToWidth(terminalText(line).replace(/\s+/g, " "), Math.max(1, width)))
+          : state ? [...workbenchWidget(state, width),
+            ...(pending ? [truncateToWidth("Plan change proposed · /workbench", Math.max(1, width))] : [])]
+            : ["Plan ready to review", goal?.objective ?? "", "/workbench to approve and start"].map((line) => truncateToWidth(terminalText(line).replace(/\s+/g, " "), Math.max(1, width))),
         invalidate() {},
       }) : undefined);
+      if (visible) {
+        ctx.ui.setWidget("goals", undefined);
+        ctx.ui.setStatus("goals", undefined);
+      }
     }
+    return visible;
   }
   function append(event: WorkbenchEvent, ctx: ExtensionContext) {
     pi.appendEntry(WORKBENCH_ENTRY, event);
@@ -166,7 +181,7 @@ export function registerWorkbench(pi: ExtensionAPI, currentGoal: (ctx: Extension
   }
   async function display(text: string, ctx: ExtensionContext) {
     if (ctx.mode === "tui") {
-      await ctx.ui.custom<void>((tui, _theme, _keys, done) => new WorkbenchView(text, () => Math.max(3, tui.terminal.rows - 6), () => done()), { overlay: true });
+      await ctx.ui.custom<void>((tui, _theme, _keys, done) => new WorkbenchView(text, () => tui.terminal.rows, () => done()), { overlay: true, overlayOptions: { width: "100%", maxHeight: "100%" } });
     } else {
       if (!ctx.isIdle()) throw new Error("Use inspection commands while idle outside the TUI; views must not enqueue steering.");
       pi.sendMessage({ customType: "pi-workbench-view", content: terminalText(text), display: true }, { triggerTurn: false });
@@ -178,30 +193,92 @@ export function registerWorkbench(pi: ExtensionAPI, currentGoal: (ctx: Extension
     return goal;
   }
 
+  function allowanceFrom(text: string): number {
+    const value = Number(text);
+    if (!Number.isSafeInteger(value) || value < 1 || value > 10000) throw new Error("Choose 1–10000 tool calls; this is not a spending cap.");
+    return value;
+  }
+
+  async function review(ctx: ExtensionContext) {
+    const goal = requireGoal(ctx);
+    if (!ctx.isIdle() || ctx.hasPendingMessages()) throw new Error("Pause work and wait for current operations before reviewing a plan.");
+    const snapshot = () => JSON.stringify({ goal: currentGoal(ctx), state: readWorkbench(ctx.sessionManager.getBranch()), proposal: proposal(ctx) });
+    const version = snapshot();
+    const stored = readWorkbench(ctx.sessionManager.getBranch());
+    const state = stored?.goalId === goal.id ? stored : undefined;
+    const pending = proposal(ctx);
+    let draft = pending ?? state?.contract;
+    if (!draft && goal.status !== "needs_input") draft = { acceptance: "", invariants: "", autonomy: "", escalation: "" };
+    let allowance = state?.allowance || 20;
+    for (;;) {
+      if (snapshot() !== version) throw new Error("The task changed during review. Open /workbench again; nothing was approved.");
+      const action = await ctx.ui.custom<CardAction>((tui, _theme, _keys, done) => new WorkbenchCard({
+        objective: goal.objective, contract: draft, allowance,
+        question: goal.status === "needs_input" ? goal.inputRequest?.question : undefined,
+        reason: goal.inputRequest?.reason,
+        report: state?.checkpoint ? `${state.checkpoint.statement}\nUncertainty: ${state.checkpoint.uncertainty}\nNext decision: ${state.checkpoint.nextDecision}\nEvidence: ${state.checkpoint.evidenceIds.join(", ") || "none"}` : undefined,
+      }, () => tui.terminal.rows, done, () => ctx.ui.theme), { overlay: true, overlayOptions: { width: "100%", maxHeight: "100%" } });
+      if (!action || action === "cancel") return;
+      if (snapshot() !== version || !ctx.isIdle() || ctx.hasPendingMessages()) throw new Error("The task changed during review. Open /workbench again; nothing was approved.");
+      if (action === "change") {
+        const fields = Object.entries(PLAN_LABELS);
+        const selected = await ctx.ui.select("Change the plan", [...fields.map(([, label]) => label), "Back"]);
+        const field = fields.find(([, label]) => label === selected)?.[0] as keyof WorkbenchContract | undefined;
+        if (!field) continue;
+        const edited = await ctx.ui.editor(PLAN_LABELS[field], draft?.[field] ?? "");
+        if (edited === undefined) continue;
+        if (!edited.trim() || edited.length > 2000) { ctx.ui.notify("Use 1–2000 characters for this part of the plan.", "warning"); continue; }
+        draft = { ...(draft ?? { acceptance: "", invariants: "", autonomy: "", escalation: "" }), [field]: edited.trim() };
+      } else if (action === "more") {
+        const selected = await ctx.ui.select("More options", [...(draft ? ["Work limit"] : []), "Inspect evidence", "Back"]);
+        if (selected === "Work limit") {
+          const value = await ctx.ui.input("Maximum tool calls (not a spending cap)", String(allowance));
+          if (value !== undefined) {
+            try { allowance = allowanceFrom(value); } catch (error) { ctx.ui.notify((error as Error).message, "warning"); }
+          }
+        } else if (selected === "Inspect evidence") {
+          const evidence = workbenchEvidence(ctx.sessionManager.getBranch()).reverse();
+          if (!evidence.length) { await display("No tool results have been recorded on this branch.", ctx); continue; }
+          const selectedEntry = await ctx.ui.select("Recorded output — not certification", evidence.map((item) => `${item.id} · ${terminalText(item.tool)}`));
+          const item = evidence.find((candidate) => selectedEntry?.startsWith(`${candidate.id} · `));
+          if (item) await display(`Recorded ${item.tool} output · ${item.timestamp}\nTool error: ${item.isError}\n\n${item.output.slice(0, 24000)}\n\n/workbench evidence ${item.id} shows arguments and the source locator.`, ctx);
+        }
+      } else if (action === "start") {
+        const answer = goal.status === "needs_input" ? await ctx.ui.editor(`Your answer: ${goal.inputRequest?.question ?? "Clarify the task"}`) : undefined;
+        if (goal.status === "needs_input" && !answer?.trim()) continue;
+        if (snapshot() !== version || !ctx.isIdle() || ctx.hasPendingMessages()) throw new Error("The task changed during review. Open /workbench again; nothing was approved.");
+        if (draft) {
+          const contract = parseContract(JSON.stringify(draft));
+          if (!state || pending || CONTRACT_FIELDS.some((field) => contract[field] !== state.contract[field])) {
+            append({ kind: "contract", goalId: goal.id, objective: goal.objective, contract }, ctx);
+          }
+          append({ kind: "renew", allowance }, ctx);
+        }
+        startApprovedWork(ctx, goal.id, answer);
+        return;
+      }
+    }
+  }
+
   pi.registerCommand("workbench", {
-    description: "Shared contract and evidence: show | contract [JSON] | evidence [entry-id] | pause | resume N | off",
+    description: "Review a plain-language task card; approve and start, change the plan, or cancel. Advanced: show | contract JSON | evidence | pause | resume N | off.",
     getArgumentCompletions: (prefix) => ["show", "contract", "evidence", "pause", "resume", "off"]
       .filter((value) => value.startsWith(prefix) && value !== prefix).map((value) => ({ value, label: value })),
     handler: async (args, ctx) => {
       const parsed = args.trim().match(/^(\S+)(?:\s+(.*))?$/s);
-      const command = parsed?.[1] ?? "show";
+      const command = parsed?.[1] ?? (currentGoal(ctx)?.status === "complete" ? "show" : "review");
       const tail = parsed?.[2] ?? "";
       const rest = tail.split(/\s+/).filter(Boolean);
       const branch = ctx.sessionManager.getBranch();
       const state = readWorkbench(branch);
-      if (["show", "pause", "off"].includes(command) && rest.length) throw new Error(`${command} takes no arguments.`);
-      if (command === "contract") {
+      if (["show", "pause", "off", "review"].includes(command) && rest.length) throw new Error(`${command} takes no arguments.`);
+      if (command === "review" || (command === "contract" && !tail)) {
+        if (ctx.mode !== "tui") throw new Error("Use /workbench show to inspect, contract JSON to approve, and resume N to grant an allowance outside the TUI.");
+        await review(ctx);
+      } else if (command === "contract") {
         const goal = requireGoal(ctx);
         if (!ctx.isIdle()) throw new Error("Set the contract while idle. /workbench pause stops future admissions; let current work finish.");
-        let text = tail;
-        if (!text) {
-          if (!ctx.hasUI) throw new Error("Supply contract JSON in non-interactive mode.");
-          const initial = proposal(ctx) ?? state?.contract ?? { acceptance: "", invariants: "", autonomy: "", escalation: "" };
-          const edited = await ctx.ui.editor("Workbench contract — save to approve; Esc cancels", JSON.stringify(initial, null, 2));
-          if (edited === undefined) return;
-          text = edited;
-        }
-        const contract = parseContract(text);
+        const contract = parseContract(tail);
         if (requireGoal(ctx).id !== goal.id || !ctx.isIdle()) throw new Error("Goal or activity changed during editing; review the contract again.");
         append({ kind: "contract", goalId: goal.id, objective: goal.objective, contract }, ctx);
         ctx.ui.notify("Contract recorded. /workbench resume N grants N tool admissions; it does not start a model turn.", "info");
@@ -209,10 +286,8 @@ export function registerWorkbench(pi: ExtensionAPI, currentGoal: (ctx: Extension
         if (!state) throw new Error("Set a workbench contract first.");
         if (requireGoal(ctx).id !== state.goalId) throw new Error("Goal changed; set a contract for the current goal.");
         if (!ctx.isIdle()) throw new Error("Renew while idle after admitted work finishes.");
-        const allowance = Number(rest[0]);
-        if (rest.length !== 1 || !Number.isSafeInteger(allowance) || allowance < 1 || allowance > 10000) {
-          throw new Error("Usage: /workbench resume N (1–10000 tool admissions; not a token or spending cap)");
-        }
+        if (rest.length !== 1) throw new Error("Usage: /workbench resume N (tool calls, not a spending cap)");
+        const allowance = allowanceFrom(rest[0]);
         append({ kind: "renew", allowance }, ctx);
         ctx.ui.notify("Allowance renewed. Send a prompt to continue; goal status is unchanged.", "info");
       } else if (command === "pause") {
@@ -243,22 +318,25 @@ export function registerWorkbench(pi: ExtensionAPI, currentGoal: (ctx: Extension
             "Open with /workbench evidence <entry-id>. Source outputs are historical and may be stale."].join("\n"), ctx);
         }
       } else if (command === "show") {
-        await display(state ? [
-          `Question: ${state.objective}`, `Goal: ${state.goalId}`, `State: ${state.phase} — ${state.reason}`,
-          `Tool admissions: ${state.admissions}/${state.allowance} (not spending; excludes nested/background work)`,
-          ...CONTRACT_FIELDS.map((field) => `${field}: ${state.contract[field]}`),
-          "", "Proposed amendment (not authority):", JSON.stringify(proposal(ctx) ?? "none", null, 2),
-          "", "Agent checkpoint (reported, not certified):", JSON.stringify(state.checkpoint ?? "none", null, 2),
-          "", "Commands: /workbench contract | evidence [entry-id] | pause | resume N | off",
-          "Pause gates future tool admissions and package continuations, not running work or rollback.",
-        ].join("\n\n") : `No approved workbench contract. Start with /goals <objective> --no-auto, then /workbench contract.\nAgent proposal (not authority):\n${JSON.stringify(proposal(ctx) ?? "none", null, 2)}`, ctx);
-      } else throw new Error("Usage: /workbench show | contract [JSON] | evidence [entry-id] | pause | resume N | off");
+        const goal = currentGoal(ctx);
+        const pending = proposal(ctx);
+        await display([
+          goal?.status === "needs_input" ? "Needs your input — work paused" : state ? `Work ${state.phase}` : "No approved plan",
+          pending ? "Agent proposal (not authority)" : "",
+          planText({ objective: goal?.objective ?? state?.objective ?? "Create a goal with /goals <objective> --no-auto",
+            contract: pending ?? state?.contract, allowance: state?.allowance || 20,
+            question: goal?.inputRequest?.question, reason: goal?.inputRequest?.reason }),
+          "Agent checkpoint (reported, not certified)",
+          state?.checkpoint ? `${state.checkpoint.statement}\nUncertainty: ${state.checkpoint.uncertainty}\nNext decision: ${state.checkpoint.nextDecision}\nEvidence: ${state.checkpoint.evidenceIds.join(", ") || "none"}` : "None recorded.",
+          "/workbench to review and start · /workbench evidence to inspect output",
+        ].filter(Boolean).join("\n\n"), ctx);
+      } else throw new Error("Usage: /workbench | show | contract JSON | evidence [entry-id] | pause | resume N | off");
     },
   });
 
   pi.registerTool({
     name: "propose_contract", label: "Propose contract",
-    description: "Draft a collaboration contract for the existing user goal. A proposal grants no authority and does not change the approved contract. The user reviews it with /workbench contract, then grants an allowance with /workbench resume N.",
+    description: "Draft a brief, plain-language plan for the existing user goal. Keep each field to one or two sentences; avoid procedural jargon. A proposal grants no authority. The user reviews the task card with /workbench and chooses Approve & start, Change plan, or Cancel. If the goal itself is unclear, use request_human_input instead.",
     parameters: Type.Object({
       acceptance: Type.String({ minLength: 1, maxLength: 2000 }),
       invariants: Type.String({ minLength: 1, maxLength: 2000 }),
@@ -295,6 +373,7 @@ export function registerWorkbench(pi: ExtensionAPI, currentGoal: (ctx: Extension
   });
 
   pi.on("tool_call", (event, ctx) => {
+    if (event.toolName === "request_human_input") return;
     const state = readWorkbench(ctx.sessionManager.getBranch());
     if (!state) return;
     const goal = currentGoal(ctx);
@@ -302,7 +381,7 @@ export function registerWorkbench(pi: ExtensionAPI, currentGoal: (ctx: Extension
       append({ kind: "pause", reason: "Goal changed or completed; user contract review required." }, ctx);
       return { block: true, terminate: true, reason: "Workbench goal changed; user must review the contract." };
     }
-    if (state.phase === "paused") return { block: true, terminate: true, reason: `Workbench paused: ${state.reason} Only the user can /workbench resume N.` };
+    if (state.phase === "paused") return { block: true, terminate: true, reason: `Workbench paused: ${state.reason} Only the user can resume; open /workbench to review.` };
     append({ kind: "admit", toolCallId: event.toolCallId }, ctx);
   });
 
@@ -314,9 +393,10 @@ export function registerWorkbench(pi: ExtensionAPI, currentGoal: (ctx: Extension
     let index = messages.length - 1;
     while (index >= 0 && messages[index].role !== "user") index--;
     if (index < 0) return { messages };
+    const phase = currentGoal(ctx)?.status === "needs_input" ? "needs_input" : state.phase;
     const contractMessage = { role: "custom" as const, customType: "pi-workbench-contract", display: false,
       timestamp: messages[index].timestamp,
-      content: `User-approved workbench contract for ${state.objective}:\n${JSON.stringify(state.contract)}\nState: ${state.phase}; admissions ${state.admissions}/${state.allowance}.\nOperate within this contract. Evidence is inspectable source output, not automatic certification. Use record_checkpoint for material uncertainty or a reviewable result. Only user commands grant or renew authority. Paused means discuss without tools until the user renews; it does not mean goal complete.` };
+      content: `User-approved workbench contract for ${state.objective}:\n${JSON.stringify(state.contract)}\nState: ${phase}; admissions ${state.admissions}/${state.allowance}.\nOperate within this contract. Evidence is inspectable source output, not automatic certification. Use record_checkpoint for a reviewable result. If meaning is unclear or a human decision is needed, use request_human_input; it can reduce authority even when the work allowance is exhausted. Only user commands grant or renew authority. A workbench pause blocks work tools; request_human_input can record one question. needs_input blocks all tools until the user answers and resumes. Neither pause means goal complete.` };
     return { messages: [...messages.slice(0, index), contractMessage, ...messages.slice(index)] };
   });
   pi.on("session_start", (_event, ctx) => {
@@ -332,4 +412,5 @@ export function registerWorkbench(pi: ExtensionAPI, currentGoal: (ctx: Extension
   pi.on("session_shutdown", (_event, ctx) => {
     if (ctx.mode === "tui") ctx.ui.setWidget("pi-workbench", undefined);
   });
+  return { refresh };
 }
