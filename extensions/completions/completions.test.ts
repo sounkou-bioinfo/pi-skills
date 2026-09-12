@@ -55,7 +55,7 @@ test("busy work can consume completions without any late follow-up; shutdown rem
     sendMessage(message: unknown, options: unknown) { sent.push({ message, options }); },
   };
   completionsExtension(pi as any);
-  const ctx = { isIdle: () => idle, sessionManager: { getSessionId: () => "one", getBranch: () => [] } };
+  const ctx = { isIdle: () => idle, sessionManager: { getSessionId: () => "one" } };
   await hooks.get("session_start")!({}, ctx);
   try {
     bus.emit(COMPLETION_READY, notice("already-read"));

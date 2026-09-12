@@ -45,6 +45,7 @@ and prompt instructions are not automatically prose-only.
 | Prose-only | Relevant link checks (`npm run test:package` here); render/check README when its source changes. No unrelated runtime suite. |
 | Skills, prompts, or instruction policy | Review matching/non-matching tasks, authority routes, permissions, and preserved invariants; package/docs checks. Exercise affected prompt/host tests if runtime injection or tool behavior changes. |
 | Runtime, tests, build, dependencies, or packaging | Focused tests while iterating; `npm run check` and required boundary/platform gates before handoff. |
+| Browser review or development-server access | Actual browser decisions, private listener/forwarding checks, and installed browser assets; distinguish SSH transport proof from a real VS Code/phone UI check. |
 | Release or compatibility claim | Full local gate plus clean installed-artifact and claimed host/platform evidence. |
 
 A mixed change takes the applicable stronger gates. Repository-specific release
@@ -64,6 +65,7 @@ an inventory of irrelevant categories for every small edit.
 | Context and messaging | Fresh evidence remains visible, stored messages are unchanged, no duplicate projections, no replay of observed completions, bounded unread results. |
 | Remote services | Authentication failure, cancellation, malformed/partial response, body/page/rate limits, retries, redirected pagination. |
 | UI and packages | Empty/error states, keyboard/focus/scroll behavior, non-TUI fallback, packed assets, clean install, supported host versions. |
+| Local review | Missing UI/assets do not grant approval; plan feedback, approval, code feedback and close/abort paths; localhost binding, private forwarding, browser-helper preservation, and no implicit publication. |
 
 ## Test integrity
 

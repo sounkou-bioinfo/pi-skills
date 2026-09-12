@@ -14,7 +14,7 @@ output:
 ```{r setup, include=FALSE}
 litedown::reactor(
   echo = FALSE, message = FALSE, warning = FALSE,
-  dev = Sys.getenv("FIGDEV", "svg"), dpi = 72,
+  dev = "png", dev.args = list(units = "in", res = 144, type = "cairo"),
   fig.width = 13.6, fig.height = 5
 )
 
@@ -24,42 +24,48 @@ GRID <- "#e1e0d9"; BASE <- "#c3c2b7"
 BLU  <- "#2a78d6"; BLU100 <- "#cde2fb"; BLU200 <- "#9ec5f4"; BLU550 <- "#1c5cab"
 ORA  <- "#eb6834"
 
-## Figures are sized in pixels, not inches: the svg device writes
-## inches * 72 px, so 13.6in == 979px, matching the CSS content width.
-## ps = 15 keeps label text at 13-15px on screen instead of 8px.
+## Self-contained raster figures isolate each plot's font rendering.
+## CSS limits display width; 144 dpi keeps labels sharp at article size.
 blank_plot <- function(xlim, ylim, mar = c(0.2, 0.2, 0.2, 0.2)) {
   par(mar = mar, bg = SURF, family = "sans", xpd = NA, ps = 15)
   plot.new(); plot.window(xlim = xlim, ylim = ylim)
 }
 
-## Read a numeric constant straight out of the TypeScript sources, so the
-## figures cannot drift away from the implementation.
+## Source-owned limits use integer literals or products, such as 12 * 1024.
 const_num <- function(path, name) {
-  src <- paste(readLines(file.path("..", path), warn = FALSE), collapse = "\n")
-  m <- regmatches(src, regexpr(paste0(name, "\\s*=\\s*[0-9_]+"), src))
-  if (!length(m)) return(NA_integer_)
-  as.integer(gsub("[^0-9]", "", m))
+  src <- readLines(file.path("..", path), warn = FALSE)
+  pattern <- paste0("^const\\s+", name,
+                    "\\s*=\\s*([0-9]+(?:_[0-9]+)*(?:\\s*\\*\\s*[0-9]+(?:_[0-9]+)*)*)\\s*;$")
+  matches <- regmatches(src, regexec(pattern, src, perl = TRUE))
+  matches <- matches[lengths(matches) > 0L]
+  if (length(matches) != 1L) {
+    stop("Expected one integer constant or product for ", name, " in ", path,
+         call. = FALSE)
+  }
+  factors <- strsplit(matches[[1L]][[2L]], "*", fixed = TRUE)[[1L]]
+  prod(as.numeric(gsub("_", "", factors, fixed = TRUE)))
 }
 
-NOTE_BYTES  <- const_num("extensions/memory/store.ts", "MAX_MEMORY_BYTES")
-WAKE_ROWS   <- const_num("extensions/memory/index.ts", "HISTORY_LINE_BUDGET")
-MATCH_ROWS  <- const_num("extensions/memory/index.ts", "TASK_MATCH_LIMIT")
+NOTE_BYTES <- const_num("extensions/memory/store.ts", "MAX_MEMORY_BYTES")
+PROJECTION_BYTES <- const_num("extensions/memory/index.ts", "PROJECTION_BYTES")
+WAKE_EXAMPLE_ROWS <- 8L
 
-## Measured size of the stable system-prompt policy the two extensions append.
+## Source sizes of two first-party stable policy definitions.
 policy_bytes <- function(path, marker) {
   x <- readLines(file.path("..", path), warn = FALSE)
   i <- grep(marker, x, fixed = TRUE)
-  if (!length(i)) return(0L)
-  j <- grep("^`;$|`;\\s*$", x[i:length(x)])[1] + i - 1L
-  sum(nchar(x[i:j], type = "bytes"))
+  if (length(i) != 1L) stop("Expected one policy marker ", marker, " in ", path, call. = FALSE)
+  end <- grep("^`;$|`;\\s*$", x[seq.int(i, length(x))])
+  if (!length(end)) stop("Unterminated policy ", marker, " in ", path, call. = FALSE)
+  sum(nchar(x[seq.int(i, i + end[[1L]] - 1L)], type = "bytes"))
 }
 MEM_POLICY  <- policy_bytes("extensions/memory/index.ts", "PERMANENT MEMORY POLICY")
-GOAL_POLICY <- policy_bytes("extensions/goals/index.ts", "PI GOAL POLICY")
+REVIEW_POLICY <- policy_bytes("extensions/plannotator/config.ts", "LOCAL REVIEW POLICY")
 ```
 
 ## 0. Summary
 
-Five systems are on the table. Four are external; one is ours.
+Six systems are on the table. Five are external; one is ours.
 
 | System | Substrate | Written by | History | Verdict for us |
 |---|---|---|---|---|
@@ -99,7 +105,7 @@ A **slot** is `(graph, subject, predicate)`. Appending a statement to an occupie
 slot supersedes the old value without rewriting it, so every field carries its own
 validity interval and the whole store can be replayed at any transaction.
 
-```{r fig-asof, fig.height=5.2}
+```{r fig-asof, fig.height=5.2, fig.alt='Statement validity intervals and the values current at transaction 12.'}
 slots <- list(
   list(lab = "lode:covers",      tx = c(3, 11, 18)),
   list(lab = "lode:verifiedRev", tx = c(5, 14)),
@@ -161,11 +167,13 @@ read-only `sql` connection (`store.ts:313`), so `memory sql` sees the same views
 | Recall | process-local DuckDB FTS over `note_statement`, bm25 | rebuilt per watermark |
 | `sql` | read-only connection, no filesystem or network, bounded rows/memory/threads/runtime | hard |
 
-The frontier below is not a sketch — it runs the same recursion as the `wake_frontier`
-CTE in `session.sql`, for `{r} WAKE_ROWS` slots (`HISTORY_LINE_BUDGET`) over 23 notes.
-Old ranges collapse into one summary line; detail sharpens toward the present.
+The frontier below implements the recursion in the `wake_frontier` CTE in
+`session.sql`, with an illustrative budget of `{r} WAKE_EXAMPLE_ROWS` slots over
+23 notes. Old ranges collapse into one summary line; detail sharpens toward the
+present. This is an explicit `wake` query, separate from the current-slot
+projection injected into model context.
 
-```{r fig-wake, fig.height=3.6}
+```{r fig-wake, fig.height=3.6, fig.alt='A historical wake frontier covers old notes with coarse summaries and recent notes with finer detail.'}
 wake_frontier <- function(note_count, line_budget) {
   top <- 1; while (top < note_count) top <- top * 2
   out <- list()
@@ -185,7 +193,7 @@ wake_frontier <- function(note_count, line_budget) {
 }
 
 N <- 23
-fr <- wake_frontier(N, WAKE_ROWS)
+fr <- wake_frontier(N, WAKE_EXAMPLE_ROWS)
 
 blank_plot(c(-1.4, N + 2.6), c(-1.25, 1.55), mar = c(0.2, 0.2, 0.2, 0.2))
 for (i in seq_len(nrow(fr))) {
@@ -210,22 +218,22 @@ legend(-1.4, 1.55, bty = "n", horiz = TRUE, cex = 0.88, text.col = INK2,
 
 ### 1.4 Where context actually enters the model
 
-This is the part most external systems get wrong, and ours already gets right:
-the cached prefix never moves, and everything task-conditioned is transient.
+Memory policy is stable system text; task-conditioned memory arrives in a
+transient projection. Plannotator phase messages live in conversation history.
+Tree navigation, compaction, and result eviction can change the active prefix;
+cache reuse depends on the host and provider.
 
-```{r fig-context, fig.height=6}
+```{r fig-context, fig.height=6, fig.alt='Stable policy and conversation history precede a bounded memory projection and the current user message.'}
 bands <- data.frame(
   lab  = c("system prompt — stable policy",
            "transcript (grows)",
            "<memory_projection>",
-           "<active_goal>",
            "current user message"),
-  note = c("memory + goal policy, measured below",
-           "prior turns, untouched",
-           paste0(WAKE_ROWS, " frontier rows + ≤", MATCH_ROWS, " FTS matches"),
-           "objective + turn counters",
+  note = c("memory + local-review policy definitions, measured below",
+           "prior turns and Plannotator phase messages",
+           paste0("current slots + task matches; ", PROJECTION_BYTES / 1024, " KiB budget"),
            "the task"),
-  kind = c("stable", "stable", "transient", "transient", "now"),
+  kind = c("stable", "stable", "transient", "now"),
   stringsAsFactors = FALSE
 )
 h <- 1; gap <- 0.34
@@ -250,10 +258,10 @@ for (i in seq_len(n)) {
 yb <- tops[2]; yt <- tops[1] + h
 segments(9.5, yb, 9.5, yt, col = BLU, lwd = 1.4)
 segments(9.5, c(yb, yt), 11, c(yb, yt), col = BLU, lwd = 1.4)
-text(8.6, (yb + yt) / 2, "cached prefix", srt = 90, col = BLU550, cex = 0.88)
+text(8.6, (yb + yt) / 2, "reusable prefix", srt = 90, col = BLU550, cex = 0.88)
 
 ## transient bracket
-yb2 <- tops[4]; yt2 <- tops[3] + h
+yb2 <- tops[3]; yt2 <- tops[3] + h
 segments(9.5, yb2, 9.5, yt2, col = ORA, lwd = 1.4)
 segments(9.5, c(yb2, yt2), 11, c(yb2, yt2), col = ORA, lwd = 1.4)
 text(8.6, (yb2 + yt2) / 2, "rebuilt per turn", srt = 90, col = ORA, cex = 0.88)
@@ -261,12 +269,15 @@ text(8.6, (yb2 + yt2) / 2, "rebuilt per turn", srt = 90, col = ORA, cex = 0.88)
 text(12, max(tops) + h + 0.45, "request order ↓", adj = 0, col = MUT, cex = 0.88)
 ```
 
-The projection is keyed on `sessionId : userTimestamp : sha256(prompt)`
-(`index.ts:212`), frozen for the whole tool loop, never persisted, and replaced
-rather than accumulated. A write therefore changes retrieval on the **next** user
-turn without touching the cache prefix. Around it, `context-budget` caps each
-built-in inspection result at 12 KiB and the aggregate at 64 KiB, freezing each
-result's fate the first time it is seen so prompt caching survives.
+`buildTurnProjection()` in `extensions/memory/index.ts` combines current global
+and project slots with task-matched current records, deduplicates them, and applies
+a `{r} PROJECTION_BYTES / 1024` KiB byte budget including rendered metadata. Wake
+history is retrieved explicitly. The transient projection is keyed by session,
+working directory, project override, user timestamp, and prompt hash. It is reused
+through the tool loop, never persisted, and replaced rather than accumulated.
+A write therefore changes retrieval on the **next** user turn. Around it, `context-budget` caps each built-in inspection result at 12 KiB
+and the aggregate at 64 KiB. Evicting an older result to retain fresh evidence can
+change the active context; bounded output is not a cache-hit guarantee.
 
 ### 1.5 Limits worth remembering
 
@@ -451,13 +462,13 @@ downward; a cloned child `curl`s a snapshot of the parent, with the warning that
 | Staleness | none | "automate what you can" | none | none | none | *(computable)* |
 | Query surface | grep | grep | grep | grep | list + filters | **SQL + FTS + graph** |
 
-The axis that decides cost per session is *always loaded*. Ours is the only design
-where that number is a measured constant rather than a target the author is asked
-to respect.
+Stable policy text and transient retrieval have different costs. The chart shows
+source-size estimates for two first-party policy definitions and the separate
+runtime projection budget; it does not measure an entire model request.
 
-```{r fig-budget, fig.height=5}
-ours <- (MEM_POLICY + GOAL_POLICY) / 1024
-proj <- (WAKE_ROWS * 120 + MATCH_ROWS * NOTE_BYTES) / 1024
+```{r fig-budget, fig.height=5, fig.alt='A comparison of policy size estimates and the separate runtime memory projection byte budget.'}
+ours <- (MEM_POLICY + REVIEW_POLICY) / 1024
+proj <- PROJECTION_BYTES / 1024
 
 d <- data.frame(
   lab = c("Lode Coding",
@@ -467,7 +478,7 @@ d <- data.frame(
           "pi-skills stable policy",
           "pi-skills turn projection"),
   kb  = c(NA, 25, 12, 3.9, ours, proj),
-  src = c("no bound", "documented cap", "derived", "derived", "measured", "bounded"),
+  src = c("no bound", "documented cap", "derived", "derived", "source estimate", "byte budget"),
   stringsAsFactors = FALSE
 )
 d$hi <- grepl("^pi-skills", d$lab)
@@ -476,7 +487,7 @@ XM <- 28
 blank_plot(c(-13.5, XM + 15), c(0.3, nrow(d) + 0.9), mar = c(3.4, 0.2, 0.2, 0.2))
 axis(1, at = seq(0, 25, 5), col = BASE, col.axis = MUT, col.ticks = BASE,
      cex.axis = 0.86, lwd = 1, line = -1.2, tck = -0.02)
-text(12.5, -0.55, "KB loaded into every session, before any work", col = MUT, cex = 0.88)
+text(12.5, -0.55, "KB of context; policy and projection shown separately", col = MUT, cex = 0.88)
 abline(v = seq(5, 25, 5), col = GRID, lwd = 1)
 
 for (i in seq_len(nrow(d))) {
@@ -498,10 +509,13 @@ segments(0, 0.55, 0, nrow(d) + 0.45, col = BASE)
 ```
 
 *Derived* rows convert the framework's own line ceiling at 60 bytes/line
-(CLAUDE.md 200 lines; LeanContext 50 + 15). *Measured* reads the two policy strings
-straight out of `extensions/memory/index.ts` and `extensions/goals/index.ts`.
-*Bounded* is `{r} WAKE_ROWS` frontier rows plus `{r} MATCH_ROWS` matches at the
-`{r} NOTE_BYTES`-byte note ceiling — the worst case, not an average.
+(CLAUDE.md 200 lines; LeanContext 50 + 15). *Source estimate* reads the two policy definitions
+from `extensions/memory/index.ts` and `extensions/plannotator/config.ts`.
+These source-size estimates cover two policy definitions, not all host or
+Plannotator phase instructions.
+*Byte budget* is the `{r} PROJECTION_BYTES`-byte `PROJECTION_BYTES` limit used by
+`buildTurnProjection()`. Record metadata consumes this budget too; it is not a
+fixed row count or an estimate based only on note text lengths.
 
 Two further conclusions fall out of the table:
 
@@ -567,7 +581,7 @@ Their three tiers are not three files for us; they are three mechanisms we own.
 | Workbench rule | stated | `context-budget`, enforced in bytes |
 | Shadow Board rule | stated | Pi's skill listing |
 | Pull rule | manifest discipline | per-turn projection built from the prompt |
-| Session discipline | prose | `goals`, with evidence-gated completion |
+| Session discipline | prose | Plannotator local review and native Pi tree exploration |
 | Compaction | manual demotion | note stream + summary tree (`nap` / `zoom`) — no equivalent on their side |
 
 Three of their ideas are genuinely new to us:

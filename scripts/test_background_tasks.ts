@@ -96,7 +96,7 @@ try {
   };
   const ctx = {
     ...context, hasUI: false, isIdle: () => idle,
-    sessionManager: { getSessionId: () => "integration", getBranch: () => [] },
+    sessionManager: { getSessionId: () => "integration" },
     ui: { notify() {}, setStatus() {}, setWidget() {} },
   };
   completionsExtension(pi as any);

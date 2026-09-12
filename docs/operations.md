@@ -5,7 +5,8 @@
 ## Installation and dependencies
 
 Pi installs npm dependencies when installing this package. Runtime Pi APIs are
-host-provided peers; `@duckdb/node-api` is a package dependency. If it is missing
+host-provided peers. `@duckdb/node-api` is a package dependency; the pinned
+`@plannotator/pi-extension` and its review assets are bundled for Pi's loader. If it is missing
 from an existing checkout, install that checkout's dependencies: `/reload` is
 not an installer. Finish live work before updating/reloading extensions.
 
@@ -16,6 +17,7 @@ not an installer. Finish live work before updating/reloading extensions.
 | R/C audit | System R, `treesitter`, `treesitter.r` / [treesitter.c](https://github.com/sounkou-bioinfo/treesitter.c), `jsonlite`. Missing grammars and parse errors are explicit failures; no parser fallback. |
 | Optional Jarl audit | Separately installed [Jarl](https://github.com/etiennebacher/jarl); request it explicitly. |
 | Memory | DuckDB SQLite and FTS extensions; matching artifacts may need downloading on a cold cache. |
+| Local review | A browser locally or through VS Code Remote-SSH forwarding; Git for diff review. Plannotator requires Pi >=0.79.1. |
 
 ## Background tasks and completions
 
@@ -75,7 +77,7 @@ In `r_eval`, helpers include `install_r_packages()`, `context_load()`,
 `rlm_call()` requires explicit recursive mode. Persistent R/NNG workers are a
 [design proposal](rlm-r-nng-arrow-design.md), not the current implementation.
 
-## Memory and goals
+## Memory
 
 Memory's append-only SQLite authority defaults to `~/.pi/agent/memory.sqlite`;
 `PI_MEMORY_DB` overrides it. SQLite WAL supports concurrent writers. DuckDB supplies
@@ -88,36 +90,118 @@ current versus historical queries, applicability, SQL boundaries and rollout.
 
 Automatic global/project context shares eight-record and 12 KiB budgets. It stays
 frozen through the same project's tool loop, refreshing on a new turn or project
-switch; it is not persisted as another user message. `/goals` creates an explicit
-objective and continuation policy. The stored token budget is
-not an enforced cumulative spending cap; do not use it as a billing limit.
+switch; it is not persisted as another user message.
 
 The semantic views follow [INCATools Semantic-SQL](https://github.com/INCATools/semantic-sql).
 The summary hierarchy is independently implemented and inspired by
 [OptMem](https://github.com/VictorTaelin/OptMem); no OptMem source is included.
 
-## Shared terminal workbench
+## Local review
 
-`/workbench` adds an opt-in review envelope to the existing goal. The agent can
-`propose_contract`; the user opens `/workbench` for a plain-language card with
-**Approve & start**, **Change plan**, and **Cancel**. Approval grants the displayed
-tool-call allowance and starts a turn. More exposes limits and evidence. The
-advanced `contract JSON` and `resume N` commands remain separate, non-starting
-operations. `record_checkpoint` links an agent report to retained tool-result
-entry IDs and pauses for review. `/workbench evidence` opens recorded output;
-it does not certify its interpretation.
+Plan and diff review use upstream [Plannotator](https://github.com/backnotprop/plannotator),
+`@plannotator/pi-extension` 0.27.14 (MIT OR Apache-2.0). Its Pi extension supplies
+the workflow, browser UI, annotations, and approval handling. Load one copy of
+Plannotator. No separate CLI installer is needed for these Pi commands.
+Plan submission requires interactive Pi and installed browser assets; headless
+submission is blocked rather than treated as approval. Background agents can
+prepare a Markdown plan for review in an interactive session.
 
-`request_human_input` records a concrete question and reason on the existing goal,
-even before a workbench contract exists. **Needs your input** blocks new tool
-admissions, automatic goal continuation, and completion-triggered wakes without
-claiming completion. The user answers through `/workbench` or `/goals resume
-<answer>`; ordinary chat does not clear the hold. The question survives reopening.
+**Work and review locally first.** Local plan approval authorizes implementation,
+not publication. Push branches, submit PRs or stacks, post remote reviews or
+comments, trigger remote CI, and merge only when the user explicitly requests those actions. This is a workflow
+instruction, not a network sandbox or a guarantee about an agent's behavior.
 
-Pause blocks future tool admissions and this package's automatic continuations.
-It does not cancel admitted jobs, cover child-agent spending, or roll back files.
-State is session/branch-local and requires renewal after reopening or reloading.
-The [workbench guide](workbench.md) covers commands, limits, and phone access to
-the same VM session through SSH/tmux. No browser service is started.
+| Pi command | Use |
+|---|---|
+| `/plannotator-plan-mode` | Explore and draft a plan for human review. `pi --plan` starts in this mode. |
+| `plannotator_submit_plan` tool | Have the agent submit its Markdown plan for browser approval or revision. |
+| `/plannotator-review` | Review the local working-tree diff and return annotated feedback. No PR is needed. |
+| `/plannotator-review <PR-URL>` | Inspect an existing published PR. Posting a review or comments is a separate, explicit action. |
+| `/plannotator-annotate path/to/plan.md` | Review a Markdown artifact. |
+| `/plannotator-last` | Annotate an explanation from the conversation. |
+
+On narrow screens, close the annotation panel and sidebar to read the plan;
+the green approval button is labeled **OK**. Browser viewport checks are not a
+substitute for trying the actual phone/client.
+
+Code-review annotations return to Pi as findings to verify and discuss. Have the
+agent ground its verdicts in the code, then choose which revisions to apply;
+sending annotations is not automatic agreement that every finding is a bug.
+
+Use ordinary file inspection and local tests throughout implementation. Review
+untracked files as well as tracked changes. If work is already committed locally,
+select an appropriate commit/base comparison in the review UI. GitHub remains
+authoritative for published code reviews, CI results, and merges; local annotations
+are not GitHub approvals. Native [stacked PRs](https://docs.github.com/en/pull-requests/get-started/about-stacked-prs)
+can package coherent, dependent changes after local review. `gh stack submit`
+publishes branches and PRs: it belongs to that explicit publication step.
+
+### Local machines and VS Code Remote-SSH
+
+The review service listens on loopback, including inside SSH sessions. The
+package sets `PLANNOTATOR_REMOTE=0` and rejects public bind/URL configurations.
+Sharing links are disabled by default with `PLANNOTATOR_SHARE=disabled`.
+Plannotator's own remote mode binds all interfaces without authentication; it
+is not the configuration used here.
+
+On a local machine, Plannotator opens the browser normally. In a VS Code
+Remote-SSH terminal, keep the `BROWSER` helper supplied by VS Code: it opens
+links on the client. Use the **Ports** view to forward the review port privately
+if it has not been forwarded automatically. Do not make the forwarded port
+public. This uses the existing SSH connection and does not require installing a
+remote-access service or changing SSH configuration.
+
+Ports are ephemeral by default so parallel sessions do not compete for one port.
+For a stable forwarded URL, choose an **unused port dedicated to that Pi session**:
+
+```bash
+PLANNOTATOR_PORT=19432 pi
+```
+
+Forward remote port `19432` in VS Code's Ports view and open
+`http://127.0.0.1:19432` on the client while a review is open. For plain SSH, open a
+private tunnel from the client instead:
+
+```bash
+ssh -N -L 127.0.0.1:19432:127.0.0.1:19432 user@development-server
+```
+
+Use a different port for each concurrent session. Upstream can reclaim a fixed
+port from an existing review, so do not reuse a port another session owns.
+Loopback plus SSH forwarding protects network access, not access by untrusted
+local users on a shared server. Review services do not provide per-user HTTP
+authentication; use a trusted host or additional isolation for sensitive work.
+Browser closing, tree navigation, and cancelling a review do not undo file changes
+or cancel independently running jobs.
+
+### Build understanding with Pi's tree
+
+Keep the implementation objective on a stable conversation branch. Before a
+side discussion, label its **assistant response** in `/tree`, for example
+`implementation-root`. Selecting a user-message node instead can restore that
+prompt to the editor; it is not the same resume point.
+
+1. Use `/explore-topic <question>` for a short, read-only discussion. Compare
+   alternatives and inspect evidence; do not begin implementation implicitly.
+2. When you want to inspect a brief before leaving, use `/return-brief` to collect the objective, decisions actually made by the
+   user, evidence, unresolved questions, and a proposed next step.
+3. Finish or close outstanding review tabs. Open `/tree`, return to the labeled
+   assistant anchor, and choose a branch summary. Custom summary instructions can
+   request the same brief and separate user decisions from agent suggestions.
+4. Inspect that summary and choose the next action. Submit an implementation plan
+   through Plannotator when useful; approval and implementation happen on this
+   branch, without replaying the entire exploratory discussion.
+
+The side branch remains inspectable in the same session. Native branch
+summarization may make a model request; navigating without a summary does not
+provide the side discussion to the destination branch. `/fork` creates a separate
+session and is useful for an independent investigation, whereas `/tree` is the
+usual return path for a short side discussion.
+
+Tree navigation changes conversation context, **not the working directory, Git
+branch, files, or running processes**. Keep exploratory work read-only, or isolate
+experiments explicitly. Summaries preserve hypotheses and evidence; they do not
+turn an agent suggestion or an external document into user policy.
 
 ## Auditing, context, and terminal behavior
 

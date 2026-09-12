@@ -37,7 +37,7 @@ try {
       npm_config_offline: "true",
       npm_config_update_notifier: "false",
     },
-    encoding: "utf8", timeout: 30_000, maxBuffer: 2 * 1024 * 1024,
+    encoding: "utf8", timeout: 60_000, maxBuffer: 16 * 1024 * 1024,
   });
   const packages = JSON.parse(output);
   assert.equal(packages.length, 1);
@@ -50,17 +50,23 @@ function ships(destination) {
   return packed.has(destination) || [...packed].some((file) => file.startsWith(`${destination}/`));
 }
 
-test("pack includes runtime sources, workers, SQL, skills, vendor license and local QA docs", async () => {
+test("pack includes runtime sources, review assets, prompts, skills and license notices", async () => {
+  const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+  assert.equal(manifest.dependencies["@plannotator/pi-extension"], "0.27.14");
+  assert(manifest.bundledDependencies.includes("@plannotator/pi-extension"));
+  assert.deepEqual(manifest.pi.prompts, ["./prompts"]);
   const required = [...documents, ...docs, "LICENSE"];
-  for (const directory of ["extensions", "skills", "vendor/pi-background-tasks"]) {
+  for (const asset of ["index.ts", "plannotator.json", "plannotator.html", "review-editor.html"]) required.push(`node_modules/@plannotator/pi-extension/${asset}`);
+  for (const directory of ["extensions", "skills", "prompts", "scripts", "vendor/pi-background-tasks"]) {
     required.push(...(await filesUnder(directory)).filter((file) => !file.endsWith(".test.ts")));
   }
   for (const file of required) assert(packed.has(file), `missing packed asset: ${file}`);
   for (const file of packed) {
     assert(!file.startsWith(".pi/"), `session artifact shipped: ${file}`);
     assert(!/^[^/]*test-build\//.test(file), `test build shipped: ${file}`);
-    assert(!file.startsWith("node_modules/"), `unexpected bundled dependency: ${file}`);
+    assert(!file.startsWith("extensions/goals/"), `competing goal controller shipped: ${file}`);
   }
+  assert(!packed.has("node_modules/@earendil-works/pi-coding-agent/package.json"), "the host SDK remains a peer, not a bundled runtime");
 });
 
 test("first-party inline Markdown links resolve to files or directories in the package", async () => {

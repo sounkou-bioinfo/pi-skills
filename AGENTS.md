@@ -2,6 +2,11 @@
 
 - Apply [native-tool-discipline](skills/native-tool-discipline/SKILL.md) whenever selecting tools, commands, scripts, or file-editing methods.
 - Apply [no-ghosts](skills/no-ghosts/SKILL.md) whenever writing or editing prose or tests. Tests state the final contract independently of RED/GREEN sequencing.
+- Use [local-review](skills/local-review/SKILL.md) for Plannotator reviews and
+  short native Pi tree explorations that return to implementation. Keep review
+  and verification local; push branches, publish PRs/stacks or remote reviews,
+  trigger remote CI, or merge only when the user explicitly requests it.
+  Preserve private VS Code Remote-SSH access.
 - Apply [We Use R Damnit](skills/we-use-r-damnit/SKILL.md) whenever writing, editing, reviewing, or generating R code.
 - For runtime/contract changes, use [the QA standard](EXTENSION_QA_STANDARD.md)
   and the affected rows of [TEST_PLAN.md](TEST_PLAN.md). For test commands,

@@ -26,24 +26,32 @@ configuration](docs/operations.md).
 
 ## Included
 
-| Capability                                                           | Entry points / source                                                                                                                                |
-|----------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Background shell tasks and task dock                                 | `bg_run`, `bg_status`, `bg_logs`, `bg_kill`; [manager](vendor/pi-background-tasks/UPSTREAM.md)                                                       |
-| Long-context analysis with JavaScript and system R                   | [rlm](extensions/rlm)                                                                                                                                |
-| Project/global notes, scoped history, and recall                     | [memory](docs/memory.md)                                                                                                                             |
-| Explicit goals, human-input pauses, and continuation                 | [/goals](extensions/goals); `request_human_input`                                                                                                    |
-| Plain-language task cards, approval/start, and trace-linked evidence | [/workbench](docs/workbench.md); `propose_contract`, `record_checkpoint`                                                                             |
-| R-native coding style                                                | [We Use R Damnit](skills/we-use-r-damnit/SKILL.md)                                                                                                   |
-| R/C structural review; optional Jarl lint                            | [anti_slop](skills/r-c-anti-slop/SKILL.md)                                                                                                           |
-| Web and biomedical evidence search                                   | [web_search](extensions/codex-web-search), [biomedical_search](extensions/biomedical-evidence)                                                       |
-| Completion batching and bounded inspection context                   | [completions](extensions/completions), [context-budget](extensions/context-budget)                                                                   |
-| Mandatory artifact and tool discipline                               | [no-ghosts](skills/no-ghosts/SKILL.md), [native-tool-discipline](skills/native-tool-discipline/SKILL.md), [prompt hook](extensions/mandatory-skills) |
-| Decision-review instructions and SSH-safe path clicks                | [expert-discipline](extensions/expert-discipline), [vscode-path-links](extensions/vscode-path-links)                                                 |
+| Capability                                                  | Entry points / source                                                                                                                                |
+|-------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Background shell tasks and task dock                        | `bg_run`, `bg_status`, `bg_logs`, `bg_kill`; [manager](vendor/pi-background-tasks/UPSTREAM.md)                                                       |
+| Long-context analysis with JavaScript and system R          | [rlm](extensions/rlm)                                                                                                                                |
+| Project/global notes, scoped history, and recall            | [memory](docs/memory.md)                                                                                                                             |
+| Local plan and diff review, including VS Code Remote-SSH    | [Plannotator integration](extensions/plannotator); [operating guide](docs/operations.md#local-review)                                                |
+| Short explorations and deliberate returns through Pi’s tree | [local-review workflow](skills/local-review/SKILL.md); `/explore-topic`, `/return-brief`                                                             |
+| R-native coding style                                       | [We Use R Damnit](skills/we-use-r-damnit/SKILL.md)                                                                                                   |
+| R/C structural review; optional Jarl lint                   | [anti_slop](skills/r-c-anti-slop/SKILL.md)                                                                                                           |
+| Web and biomedical evidence search                          | [web_search](extensions/codex-web-search), [biomedical_search](extensions/biomedical-evidence)                                                       |
+| Completion batching and bounded inspection context          | [completions](extensions/completions), [context-budget](extensions/context-budget)                                                                   |
+| Mandatory artifact and tool discipline                      | [no-ghosts](skills/no-ghosts/SKILL.md), [native-tool-discipline](skills/native-tool-discipline/SKILL.md), [prompt hook](extensions/mandatory-skills) |
+| Decision-review instructions and SSH-safe path clicks       | [expert-discipline](extensions/expert-discipline), [vscode-path-links](extensions/vscode-path-links)                                                 |
 
 Browse [skills](skills/) for R packages, native bindings, genomics, and
 project workflows, including [orientation after a handoff or conflicting
 evidence](skills/project-orientation/SKILL.md).
-[package.json](package.json) declares the loaded extensions and skills.
+[package.json](package.json) declares the loaded extensions, skills, and
+prompts.
+
+Review plans and changes locally with
+[Plannotator](https://github.com/backnotprop/plannotator). Publish
+branches or GitHub PR stacks only when explicitly requested, after local
+review and tests. The integration uses loopback listeners and private
+forwarding for development servers; it preserves VS Code’s browser
+helper.
 
 Keep `completions` enabled alongside background tasks and RLM. Reading a
 terminal result suppresses its pending notice; unread notices are
@@ -70,4 +78,7 @@ certification. Use the playbook’s change-scoped checks during editing.
 ## License
 
 MIT for first-party code; the vendored background manager is
-[ISC-licensed](vendor/pi-background-tasks/LICENSE).
+[ISC-licensed](vendor/pi-background-tasks/LICENSE). Plannotator is
+bundled from upstream with [MIT OR Apache-2.0 notices and
+provenance](extensions/plannotator/UPSTREAM.md); dependency notices
+remain with their packages.

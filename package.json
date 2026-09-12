@@ -2,7 +2,7 @@
   "name": "pi-skills",
   "version": "1.1.1",
   "private": false,
-  "description": "Skills-first Pi package with permanent Semantic-SQL memory, bioinformatics and R skills, detachable tasks, system-R RLM, and goals.",
+  "description": "Skills-first Pi package with permanent Semantic-SQL memory, bioinformatics and R skills, detachable tasks, system-R RLM, and local Plannotator review.",
   "license": "MIT",
   "type": "module",
   "keywords": [
@@ -16,6 +16,7 @@
   "files": [
     "extensions",
     "skills",
+    "prompts",
     "docs",
     "scripts",
     "vendor",
@@ -32,12 +33,14 @@
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test && npm run check:readme",
     "test:package": "node --test scripts/package.test.mjs",
-    "test": "npm run test:package && npm run test:background-tasks && npm run test:context-budget && npm run test:completions && npm run test:workbench && npm run test:memory && npm run test:rlm && npm run test:expert-discipline && npm run test:mandatory-skills && npm run test:anti-slop && npm run test:codex-web-search && npm run test:biomedical-evidence",
+    "test": "npm run test:package && npm run test:background-tasks && npm run test:context-budget && npm run test:completions && npm run test:plannotator && npm run test:memory && npm run test:rlm && npm run test:expert-discipline && npm run test:mandatory-skills && npm run test:anti-slop && npm run test:codex-web-search && npm run test:biomedical-evidence && npm run test:memory-design",
     "test:background-tasks": "rm -rf .background-task-test-build && tsc --target ES2023 --module NodeNext --moduleResolution NodeNext --strict --skipLibCheck --esModuleInterop --types node --rootDir . --outDir .background-task-test-build scripts/test_background_tasks.ts vendor/pi-background-tasks/src/core/common.ts vendor/pi-background-tasks/src/core/registry.ts vendor/pi-background-tasks/src/extension.ts && node .background-task-test-build/scripts/test_background_tasks.js; status=$?; rm -rf .background-task-test-build; exit $status",
     "test:context-budget": "rm -rf .context-budget-test-build && tsc --noEmit false --outDir .context-budget-test-build --declaration false && node --test .context-budget-test-build/context-budget/context-budget.test.js; status=$?; rm -rf .context-budget-test-build; exit $status",
     "test:completions": "rm -rf .completion-test-build && tsc --noEmit false --outDir .completion-test-build --declaration false && node --test .completion-test-build/completions/completions.test.js; status=$?; rm -rf .completion-test-build; exit $status",
-    "test:workbench:pty": "node scripts/test_workbench_pty.mjs",
-    "test:workbench": "rm -rf .workbench-test-build && tsc --noEmit false --outDir .workbench-test-build --declaration false && node --test .workbench-test-build/goals/*.test.js; status=$?; rm -rf .workbench-test-build; exit $status",
+    "test:plannotator:ui": "node scripts/test_plannotator_ui.mjs",
+    "test:plannotator:package": "node scripts/test_plannotator_package.mjs",
+    "test:memory-design": "Rscript scripts/test_memory_design.R",
+    "test:plannotator": "rm -rf .plannotator-test-build && tsc --noEmit false --outDir .plannotator-test-build --declaration false && node --test --test-concurrency=1 scripts/plannotator.test.mjs; status=$?; rm -rf .plannotator-test-build; exit $status",
     "test:memory": "rm -rf .memory-test-build && tsc --noEmit false --outDir .memory-test-build --declaration false && cp extensions/memory/*.sql .memory-test-build/memory/ && node --test .memory-test-build/memory/memory.test.js; status=$?; rm -rf .memory-test-build; exit $status",
     "test:rlm": "rm -rf .rlm-test-build && tsc --noEmit false --outDir .rlm-test-build --declaration false && cp extensions/rlm/repl-worker.mjs .rlm-test-build/rlm/ && node --test .rlm-test-build/rlm/rlm.test.js; status=$?; rm -rf .rlm-test-build; exit $status",
     "test:expert-discipline": "rm -rf .expert-discipline-test-build && tsc --noEmit false --outDir .expert-discipline-test-build --declaration false && node --test .expert-discipline-test-build/expert-discipline/expert-discipline.test.js; status=$?; rm -rf .expert-discipline-test-build; exit $status",
@@ -56,7 +59,9 @@
     "skills": [
       "./skills"
     ],
-    "prompts": []
+    "prompts": [
+      "./prompts"
+    ]
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
@@ -79,14 +84,22 @@
     }
   },
   "dependencies": {
-    "@duckdb/node-api": "^1.5.4-r.1"
+    "@duckdb/node-api": "^1.5.4-r.1",
+    "@plannotator/pi-extension": "0.27.14"
   },
+  "bundledDependencies": [
+    "@plannotator/pi-extension"
+  ],
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.84.1",
     "@earendil-works/pi-coding-agent": "^0.84.1",
     "@earendil-works/pi-tui": "^0.84.2",
     "@types/node": "^24.0.0",
+    "playwright-core": "1.63.0",
     "typebox": "^1.1.38",
     "typescript": "^5.8.3"
-  }
+  },
+  "bundleDependencies": [
+    "@plannotator/pi-extension"
+  ]
 }

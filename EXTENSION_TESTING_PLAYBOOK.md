@@ -38,14 +38,22 @@ npm run check                  # full local gate, not the default for each edit
 npm run test:background-tasks   # registry + fake-Pi tool integration, real shell jobs
 npm run test:completions        # queue and fake-Pi lifecycle
 npm run test:rlm                # worker, subprocess, store, and system-R regressions
-npm run test:workbench          # goals, contract/view tests, offline real-SDK agent loops
-npm run test:workbench:pty      # tmux and Pi fd/rg helpers; isolated CLI, scripted provider only
+npm run test:plannotator        # real SDK, headless review rejection and native tree return
+npm run test:plannotator:ui     # real Pi CLI + Chromium over an isolated private SSH tunnel
+npm run test:plannotator:package # temporary runtime-only tarball install + browser/CLI gate
 npm run test:memory             # native memory and projection tests
+npm run test:memory-design      # evaluated design figures and source-limit diagnostics
 npm run test:anti-slop          # tool adapter + native R/C analyzer fixtures
 npm run test:package            # doc links, declared assets, npm pack inventory
 ```
 
 After editing `README.Rmd`, run `npm run render:readme` and `npm run check:readme`.
+For `docs/memory-lode-design.Rmd`, run `npm run test:memory-design`, then
+`Rscript -e 'litedown::fuse("docs/memory-lode-design.Rmd")'` to update its checked-in
+HTML. The regression uses an isolated source tree and requires the R packages
+`litedown` and `xml2`, plus Cairo support in R; it checks the full render,
+source-owned limits, embedded figures with alt text, and explicit errors for
+missing or unsupported inputs.
 Other focused test commands are listed in [package.json](package.json).
 Run gates serially: existing TypeScript suites use fixed build directories and
 are not safe to run concurrently in the same checkout.
@@ -94,12 +102,13 @@ artifact cache; Pi's agent/auth directory is separate.
 | RPC | Drive a real Pi process; check request IDs, events, cancellation, and shutdown. | Keyboard/focus/rendering. |
 | Component | Render the real dock at controlled sizes and drive its key handler. | Real terminal input negotiation. |
 | PTY/TUI | Drive Pi through a pseudo-terminal; test keys, focus, scroll, and cleanup. | Platforms not exercised; a skipped PTY is not a pass. |
+| Browser / SSH | Drive actual browser controls through a private SSH tunnel; check listeners and workflow outcomes. | The desktop VS Code forwarding UI or a physical phone unless actually exercised. |
 | Scripted provider | Use a deterministic fake model inside the real agent loop; count actual follow-up requests. | Live provider behavior. |
 | Package | Inspect packed files, then separately install/load the tarball in a clean environment. | A dry-run inventory alone is not an install smoke test. |
 
-SDK, RPC, component, PTY, and scripted-provider suites are currently gaps, not
-commands to copy from upstream. Add a harness when changing those boundaries;
-see [TEST_PLAN.md](TEST_PLAN.md) for the concrete scenarios still needed.
+Use the targeted harnesses below where their assertions match the changed
+boundary. See [TEST_PLAN.md](TEST_PLAN.md) for remaining RPC, lifecycle, platform,
+and human-interface gaps.
 
 ## Fixture rules
 
@@ -123,20 +132,30 @@ see [TEST_PLAN.md](TEST_PLAN.md) for the concrete scenarios still needed.
 
 - [Background tasks](scripts/test_background_tasks.ts): signal failures and
   status/log observations suppressing a pending completion notice.
-- [Workbench](extensions/goals/workbench-sdk.test.ts): isolated real Pi SDK,
-  source-loaded extensions, a scripted provider with no network calls, real shell
-  probes, checkpoint evidence, disk reopen, and completion/goal pause behavior.
-  The ambiguous-goal regression checks one input request, no automatic restart,
-  blocked false completion, and explicit human resumption without a contract.
-  [Contract/view tests](extensions/goals/workbench.test.ts) cover branch-local
-  authority, invalid input, cancelled/stale reviews, local edits, approval/start,
-  and narrow Unicode terminal views. The [PTY test](scripts/test_workbench_pty.mjs)
-  drives actual field editing, cancellation, full-screen rendering at 80/40
-  columns, approval/start, and the needs-input reply through a scripted provider.
-  It reuses Pi's installed `~/.pi/agent/bin/fd` and `rg` without downloading tools;
-  set `PI_WORKBENCH_BIN_DIR` to another installed helper directory if needed.
-  `PI_WORKBENCH_CLI` selects a host CLI, `PI_WORKBENCH_SOURCE` selects a source
-  checkout, and `PI_WORKBENCH_PREVIEW_DIR` retains plain-text terminal captures.
+- [Local review and native tree](scripts/plannotator.test.mjs): source-loaded
+  upstream extension and wrapper in isolated real SDK sessions, with an offline
+  scripted provider. Checks planning ownership, blocked headless submission,
+  native branch summaries, retained exploratory branches and unchanged files.
+  [Browser/CLI test](scripts/test_plannotator_ui.mjs) uses tmux, installed Chromium,
+  `ssh`, `ssh-keygen`, `/usr/sbin/sshd`, Pi's installed `fd`/`rg`, and a non-loopback
+  IPv4 interface. It creates temporary SSH keys/configuration, binds the test SSH
+  server to loopback, checks review-port exposure and drives actual browser
+  controls through a private tunnel. It does not modify system SSH configuration
+  or use an existing SSH identity. The host must permit that disposable sshd
+  fixture; an unavailable prerequisite is a missing gate, not a pass.
+  Set `PI_PLANNOTATOR_CHROMIUM` to an installed browser executable,
+  `PI_PLANNOTATOR_BIN_DIR` to another Pi helper directory,
+  `PI_PLANNOTATOR_HOST_DIR` to a host Pi package directory, and
+  `PI_PLANNOTATOR_SOURCE` to another source checkout. `PI_PLANNOTATOR_PREVIEW_DIR`
+  retains browser screenshots and a terminal capture outside the package.
+  [Package gate](scripts/test_plannotator_package.mjs) installs a local tarball
+  with `--omit=dev --ignore-scripts` into a temporary consumer, runs that browser
+  gate against the installed source, and checks failure on missing review assets.
+  Installing dependencies may contact npm; browser tests block non-loopback web
+  requests and make no live model calls.
+  Separately confirm the actual VS Code Remote-SSH browser helper and private
+  Ports-panel forwarding in the intended desktop client. Transport tests cannot
+  certify that UI configuration or physical-phone usability.
 - [Completions](extensions/completions/completions.test.ts): both observation
   orders, bounded batches, wrong-session events, and shutdown.
 - [RLM](extensions/rlm/rlm.test.ts): post-`await` infinite loops, 200,000-character

@@ -1,6 +1,4 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { workbenchPaused } from "../goals/workbench.js";
-import { goalNeedsInput } from "../goals/state.js";
 
 export const COMPLETION_READY = "pi-skills:completion-ready";
 export const COMPLETION_OBSERVED = "pi-skills:completion-observed";
@@ -70,8 +68,7 @@ export default function completionsExtension(pi: ExtensionAPI): void {
     if (!ctx.isIdle() || waking) { schedule(); return; }
     try {
       queue.deliver((content, wake) => {
-        const branch = ctx!.sessionManager.getBranch();
-        waking = wake && !workbenchPaused(branch) && !goalNeedsInput(branch);
+        waking = wake;
         pi.sendMessage({ customType: "task-completions", content, display: true }, { triggerTurn: waking });
       });
     } catch (error) {
