@@ -156,6 +156,18 @@ and human-interface gaps.
   Separately confirm the actual VS Code Remote-SSH browser helper and private
   Ports-panel forwarding in the intended desktop client. Transport tests cannot
   certify that UI configuration or physical-phone usability.
+- [Expert discipline and architecture activation](scripts/expert-discipline.test.mjs):
+  `npm run test:expert-discipline` combines prompt-helper tests with real SDK sessions
+  in a different temporary project, using an isolated offline scripted provider.
+  It checks provider-visible nudges, available/absent skill discovery, explicit skill
+  invocation, and unchanged conversation messages. Set `PI_EXPERT_HOST_DIR` to the
+  host Pi package directory and `PI_EXPERT_SOURCE` to the source package to load.
+  `npm run test:expert-discipline:package` installs a local tarball with
+  `--omit=dev --ignore-scripts`, then exercises that installed source with the host
+  SDK. Dependencies may contact npm; set `npm_config_offline=true` when the required
+  packages are cached. These checks establish transport and discovery, not actual
+  model selection or human understanding. No PTY/browser gate is required for a
+  system-prompt-only change with no interactive controls.
 - [Completions](extensions/completions/completions.test.ts): both observation
   orders, bounded batches, wrong-session events, and shutdown.
 - [RLM](extensions/rlm/rlm.test.ts): post-`await` infinite loops, 200,000-character

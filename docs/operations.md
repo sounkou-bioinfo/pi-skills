@@ -96,6 +96,66 @@ The semantic views follow [INCATools Semantic-SQL](https://github.com/INCATools/
 The summary hierarchy is independently implemented and inspired by
 [OptMem](https://github.com/VictorTaelin/OptMem); no OptMem source is included.
 
+## Architecture refinement
+
+The [architecture-refinement skill](../skills/architecture-refinement/SKILL.md)
+builds a working theory linking the domain problem, evolving specification,
+implementation, evidence, and owner understanding. Use it for proposed designs,
+exploratory coding, technical issues, or systems whose behavior has outrun shared
+understanding. Pi can select it from its description, or you can invoke it explicitly:
+
+```text
+/skill:architecture-refinement Review the proposed job queue design and its failure modes.
+/skill:architecture-refinement The missing-input semantics of this R API are undecided. Explore concrete cases with small probes before proposing a contract; preserve accepted invariants.
+/skill:architecture-refinement I've lost the architectural picture of uploads. Reconstruct the flow, challenge the decisions, and walk me through the trade-offs. Review only.
+/skill:architecture-refinement Refine this issue into an actionable investigation with acceptance criteria.
+```
+
+Work in a bounded loop: observe concrete behavior, form a tentative explanation,
+probe it, examine surprises, revise, and consolidate useful learning into contracts,
+tests, or code. Open exploration can precede a hypothesis. Specifications and
+implementations can develop together; accepted user constraints remain binding.
+Exploratory observations are not automatically expected behavior: identify the
+oracle before turning a result into a contract or regression test.
+
+Our practice as R developers brings an EDA ethos to coding: inspect intermediate
+objects, summarize or visualize variation, follow surprises, and let observations
+reshape the question and the next small edit. Factor operations as their purpose
+and semantics become clear. Use each repository's native tools; retain reproducible
+cases and verify important results without hidden session state.
+A harness supports feedback and verification, but does not supply the domain theory
+or independently validate its own objective.
+
+Use event-driven checkpoints and small learning loops during authorized work, not
+a per-commit ceremony or a demand for a complete specification before coding.
+Bound each pass to a subsystem, journey, or decision, and the generated work to
+what can be understood and checked. Interactive walkthroughs use examples,
+predictions, and plausible changes; batch reviews retain unresolved owner questions.
+Clearer understanding, a ruled-out design, or a focused investigation can be a
+complete result. Findings distinguish explanation/evidence gaps from defects;
+an existing system does not automatically need a rewrite. Review and issue drafts
+stay local unless publication is explicitly requested.
+
+The [expert-discipline hook](../extensions/expert-discipline/index.ts) appends a
+short, idempotent activation nudge to the system prompt. It directs Pi to read and
+apply the skill proactively at relevant decision points, without waiting for its
+name in the user's request. The nudge uses the available skill list and its file
+location, so it works across projects rather than assuming this checkout is the
+working directory. Keep both the hook and skill enabled in the package's resource
+selection. The full skill is loaded on demand, not injected into every prompt.
+
+The nudge is fixed text, appended once without changing the incoming prompt's
+bytes. It contains no timestamp or task-specific classifier output and makes no
+extra model or cache-warming requests. Updating the prompt can invalidate a
+previously cached suffix; stable text permits reuse but does not guarantee cache
+hits or subscription savings. Loading the skill also adds ordinary read context.
+
+This is a behavioral instruction, not a scheduler, tool gate, or guarantee of
+model adherence. It does not run probes, approve changes, or certify human
+understanding. Use the applicable tests and release gates for implementation and
+shipping claims. After updating the package, finish live tasks and run `/reload`
+or start a new Pi session to load the current hook and skill.
+
 ## Local review
 
 Plan and diff review use upstream [Plannotator](https://github.com/backnotprop/plannotator),

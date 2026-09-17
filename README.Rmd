@@ -37,6 +37,7 @@ grammars. See [runtime requirements and configuration](docs/operations.md).
 | Project/global notes, scoped history, and recall | [memory](docs/memory.md) |
 | Local plan and diff review, including VS Code Remote-SSH | [Plannotator integration](extensions/plannotator); [operating guide](docs/operations.md#local-review) |
 | Short explorations and deliberate returns through Pi's tree | [local-review workflow](skills/local-review/SKILL.md); `/explore-topic`, `/return-brief` |
+| Architecture refinement and exploratory coding | [architecture-refinement](skills/architecture-refinement/SKILL.md) |
 | R-native coding style | [We Use R Damnit](skills/we-use-r-damnit/SKILL.md) |
 | R/C structural review; optional Jarl lint | [anti_slop](skills/r-c-anti-slop/SKILL.md) |
 | Web and biomedical evidence search | [web_search](extensions/codex-web-search), [biomedical_search](extensions/biomedical-evidence) |
@@ -47,6 +48,11 @@ grammars. See [runtime requirements and configuration](docs/operations.md).
 Browse [skills](skills/) for R packages, native bindings, genomics, and project
 workflows, including [orientation after a handoff or conflicting evidence](skills/project-orientation/SKILL.md).
 [package.json](package.json) declares the loaded extensions, skills, and prompts.
+
+The expert-discipline hook proactively nudges Pi to read `architecture-refinement`
+for consequential choices, uncertain requirements, issue refinement, or lost
+understanding, in any project where the skill is available. The full workflow
+loads when relevant; routine mechanical edits stay lightweight.
 
 Review plans and changes locally with [Plannotator](https://github.com/backnotprop/plannotator).
 Publish branches or GitHub PR stacks only when explicitly requested, after local
