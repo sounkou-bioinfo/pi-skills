@@ -1,11 +1,11 @@
 ---
-name: duckdb-c-extension-architecture
-description: Use for C DuckDB extension architecture, ownership, concurrency, or API-compatibility changes.
+name: duckdb-c-extension
+description: Use for C DuckDB extension architecture, ownership, concurrency, API compatibility, vendoring, function catalogs, or packaging and exposing the extension through an R package.
 ---
 
-# DuckDB C extension architecture
+# DuckDB C extension
 
-This is the generic authority for C-extension architecture, API policy, vendoring, function catalogs, and native/SQL interoperability tests.
+This is the generic authority for C-extension architecture, API policy, vendoring, function catalogs, native/SQL interoperability tests, and R-package bindings.
 
 ## Layers and ownership
 
@@ -42,4 +42,25 @@ Select checks for the changed contract; release and compatibility claims still r
 - Repeated load/unload, cancellation, shutdown, and partial-init cleanup.
 - Deterministic fixtures and generated-output checks.
 
-Useful references: `runtime-layering-checklist.md`, `state-ownership-patterns.md`, plus merged compatibility, vendoring, catalog, and test checklists under `references/`.
+Useful references: `runtime-layering-checklist.md`, `state-ownership-patterns.md`, plus compatibility, vendoring, catalog, and test checklists under `references/`.
+
+## R package bindings
+
+- The extension owns SQL/native semantics.
+- Installed extension payloads own exact binary/source provenance.
+- R owns argument admission, DBI orchestration, names, defaults, and R-native return shaping; apply [We Use R Damnit](../we-use-r-damnit/SKILL.md).
+- Generated catalogs may drive wrappers/docs, but generated files are not a second authority.
+
+Map every R argument to SQL literal, identifier, or documented raw expression explicitly. Do not rebuild native algorithms in R.
+
+Use an explicit reproducible bootstrap/configure path suitable for source packages. Install-time work may select or compile declared bundled sources, but must not perform hidden first-use downloads or mutate the source tree. Keep Unix, Windows, and wasm targets explicit. Record extension version, DuckDB ABI/version, platform, source receipt, and artifact location. Fail before `LOAD` when the required artifact/capability is unavailable.
+
+Apply these checks to the affected wrapper, build, or release surface:
+
+- Keep authored R documentation distinct from generated function-catalog fragments.
+- Test wrapper validation and defaults independently from SQL conformance.
+- Exercise a real DBI load/query path from the installed package.
+- Test configure/bootstrap and tarball installation on supported platforms.
+- Run `R CMD check` under project/CRAN constraints; see [r-package-development](../r-package-development/SKILL.md).
+
+References: `cran-bootstrap-pattern.md`, `r-package-layout-pattern.md`, `wrapper-responsibility-split.md`, `readme-rmd-custom-engine-pattern.md`.

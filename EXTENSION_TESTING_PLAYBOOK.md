@@ -5,20 +5,8 @@ Consult this file for test commands, prerequisites, or harness design. Use
 [the coverage matrix](TEST_PLAN.md) for existing evidence and gaps. Commands run
 from the repository root, not from the vendored package.
 
-## Select checks for the change
-
-- **Prose:** link/package checks; render and check README only when its source changes.
-- **Skills/prompts:** review routing on matching and non-matching tasks, preserve
-  domain constraints, and check shipped references. Textual review is not proof
-  of a model's decisions; run affected prompt/host tests for injection changes.
-- **Runtime/build/package:** use affected tests while iterating, then
-  `npm run check` and required boundary gates before handoff.
-- **Release/compatibility:** also validate clean installed artifacts and claimed
-  host/platform combinations. Do not skip these because focused tests passed.
-
-Choose by behavior, not file suffix: changing executable documentation or a
-prompt is not a prose-only edit. Follow the applicable stronger gates for mixed
-changes; do not run every command below after every patch.
+Select checks with the QA standard's [gate scope](EXTENSION_QA_STANDARD.md#gate-scope);
+do not run every command below after every patch.
 
 ## Prerequisites and commands
 
@@ -179,9 +167,8 @@ and human-interface gaps.
 
 ## Review / release record
 
-Record commit plus dirty scope, commands and results, environment, and skipped or
-unavailable gates. Do not commit credentials, `.pi/`, generated test builds, or
-machine-local logs. Use CI artifacts or an explicitly chosen external log path.
+Report as the [QA standard](EXTENSION_QA_STANDARD.md#evidence-required-for-a-change)
+requires. Keep logs in CI artifacts or an explicitly chosen external path.
 Before distribution, verify runtime assets and licenses in the archive and run a
 clean install/load on each host/platform being claimed. Updating a checkout does
 not update a running Pi process; reload only after live tasks finish.

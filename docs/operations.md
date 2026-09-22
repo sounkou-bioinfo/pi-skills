@@ -111,50 +111,20 @@ understanding. Pi can select it from its description, or you can invoke it expli
 /skill:architecture-refinement Refine this issue into an actionable investigation with acceptance criteria.
 ```
 
-Work in a bounded loop: observe concrete behavior, form a tentative explanation,
-probe it, examine surprises, revise, and consolidate useful learning into contracts,
-tests, or code. Open exploration can precede a hypothesis. Specifications and
-implementations can develop together; accepted user constraints remain binding.
-Exploratory observations are not automatically expected behavior: identify the
-oracle before turning a result into a contract or regression test.
+The skill owns the workflow: bounded observe–explain–probe–revise loops,
+event-driven checkpoints rather than per-commit ceremony, and local-only review
+and issue drafts unless publication is requested.
 
-Our practice as R developers brings an EDA ethos to coding: inspect intermediate
-objects, summarize or visualize variation, follow surprises, and let observations
-reshape the question and the next small edit. Factor operations as their purpose
-and semantics become clear. Use each repository's native tools; retain reproducible
-cases and verify important results without hidden session state.
-A harness supports feedback and verification, but does not supply the domain theory
-or independently validate its own objective.
-
-Use event-driven checkpoints and small learning loops during authorized work, not
-a per-commit ceremony or a demand for a complete specification before coding.
-Bound each pass to a subsystem, journey, or decision, and the generated work to
-what can be understood and checked. Interactive walkthroughs use examples,
-predictions, and plausible changes; batch reviews retain unresolved owner questions.
-Clearer understanding, a ruled-out design, or a focused investigation can be a
-complete result. Findings distinguish explanation/evidence gaps from defects;
-an existing system does not automatically need a rewrite. Review and issue drafts
-stay local unless publication is explicitly requested.
-
-The [expert-discipline hook](../extensions/expert-discipline/index.ts) appends a
-short, idempotent activation nudge to the system prompt. It directs Pi to read and
-apply the skill proactively at relevant decision points, without waiting for its
-name in the user's request. The nudge uses the available skill list and its file
-location, so it works across projects rather than assuming this checkout is the
-working directory. Keep both the hook and skill enabled in the package's resource
-selection. The full skill is loaded on demand, not injected into every prompt.
-
-The nudge is fixed text, appended once without changing the incoming prompt's
-bytes. It contains no timestamp or task-specific classifier output and makes no
-extra model or cache-warming requests. Updating the prompt can invalidate a
-previously cached suffix; stable text permits reuse but does not guarantee cache
-hits or subscription savings. Loading the skill also adds ordinary read context.
-
-This is a behavioral instruction, not a scheduler, tool gate, or guarantee of
-model adherence. It does not run probes, approve changes, or certify human
-understanding. Use the applicable tests and release gates for implementation and
-shipping claims. After updating the package, finish live tasks and run `/reload`
-or start a new Pi session to load the current hook and skill.
+The [expert-discipline hook](../extensions/expert-discipline/index.ts) appends
+fixed, idempotent decision-review instructions and an activation nudge to the
+system prompt. The nudge uses the available skill list and its file location, so
+Pi reads the skill proactively at relevant decision points in any project; keep
+both the hook and skill enabled. The full skill loads on demand. The appended
+text preserves the incoming prompt's bytes and makes no extra model or
+cache-warming requests; stable text permits cache reuse but does not guarantee
+it. The hook is a behavioral instruction, not a scheduler, tool gate, or proof of
+model adherence or human understanding. After updating the package, finish live
+tasks and run `/reload` or start a new session.
 
 ## Local review
 
@@ -167,9 +137,8 @@ submission is blocked rather than treated as approval. Background agents can
 prepare a Markdown plan for review in an interactive session.
 
 **Work and review locally first.** Local plan approval authorizes implementation,
-not publication. Push branches, submit PRs or stacks, post remote reviews or
-comments, trigger remote CI, and merge only when the user explicitly requests those actions. This is a workflow
-instruction, not a network sandbox or a guarantee about an agent's behavior.
+not publication; the [local-review skill](../skills/local-review/SKILL.md) owns
+that policy. It is a workflow instruction, not a network sandbox.
 
 | Pi command | Use |
 |---|---|
@@ -311,7 +280,5 @@ establish a hard quota cap.
   [rule policy](../skills/r-c-anti-slop/SKILL.md).
 - `mandatory-skills` loads `no-ghosts` and `native-tool-discipline` into every
   system prompt. They govern final-artifact wording and native tool selection.
-- `expert-discipline` appends stable decision-review instructions. It cannot
-  establish the correctness of the model's decisions or guarantee cache hits.
 - `vscode-path-links` disables Pi OSC 8 links in VS Code terminals so native path
   detection handles Remote-SSH/WSL clicks. Other terminals are unchanged.

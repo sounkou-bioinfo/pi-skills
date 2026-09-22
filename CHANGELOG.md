@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Consolidate the reuse, bindings, porting, SQL-native, single-pass, and cache/index skills into one sectioned `bioinformatics-rewrites` skill, and fold R-package bindings into `duckdb-c-extension`. Overlapping checklists merge into one reference per topic.
 - Retain a contiguous newest suffix of inspection text in `context-budget` so earlier omission notices stay byte-stable as append-only history grows. Document cache and subscription-measurement limits and viewer-only local diff review with `/plannotator-review --git`.
 - Define R-native coding idioms, language-object construction, dispatch, and contract-directed validation in the `we-use-r-damnit` skill.
 - Apply `no-ghosts` and `native-tool-discipline` through an idempotent mandatory-skills prompt hook.

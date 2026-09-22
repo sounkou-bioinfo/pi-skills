@@ -24,7 +24,7 @@ Remote-SSH forwarding are in [the operating guide](../../docs/operations.md#loca
 ## Review locally
 
 - Use `/plannotator-plan-mode` and `plannotator_submit_plan` when a plan needs review.
-- Use `/plannotator-review` for the local diff, `/plannotator-annotate <path>` for
+- Use `/plannotator-review --git` for the local diff, `/plannotator-annotate <path>` for
   Markdown, and `/plannotator-last` for an explanation. Use Pi's integration;
   a separate Plannotator CLI is not required.
 - Keep small tasks lightweight; a short clarification does not require a formal plan.
