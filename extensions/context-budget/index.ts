@@ -43,8 +43,8 @@ export function boundToolResult<T>(message: T, maxBytes = DEFAULT_TOOL_RESULT_BY
   } as T;
 }
 
-// Retain the newest evidence, not a lifetime quota of the first results seen.
-// Evicting old text can invalidate a cached prefix; hiding fresh reads is worse.
+// Retain a contiguous newest suffix of inspection text. Earlier omissions stay
+// stable as results arrive, while fresh evidence remains eligible on every call.
 export function boundInspectionResults<T>(
   messages: T[],
   maxBytes = DEFAULT_TOOL_RESULT_BYTES,
@@ -57,8 +57,8 @@ export function boundInspectionResults<T>(
     if (message.role !== "toolResult" || !message.toolName || !BOUNDED_TOOLS.has(message.toolName)) continue;
     if (!message.content || message.content.some((part) => part.type !== "text" || typeof part.text !== "string")) continue;
     const bytes = Buffer.byteLength(message.content.map((part) => part.text ?? "").join("\n"), "utf8");
-    if (bytes <= remaining) remaining -= bytes;
-    else bounded[index] = stubResult(bounded[index] as object, message.toolName, bytes) as T;
+    remaining -= bytes;
+    if (remaining < 0) bounded[index] = stubResult(bounded[index] as object, message.toolName, bytes) as T;
   }
   return bounded;
 }

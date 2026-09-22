@@ -175,10 +175,16 @@ instruction, not a network sandbox or a guarantee about an agent's behavior.
 |---|---|
 | `/plannotator-plan-mode` | Explore and draft a plan for human review. `pi --plan` starts in this mode. |
 | `plannotator_submit_plan` tool | Have the agent submit its Markdown plan for browser approval or revision. |
-| `/plannotator-review` | Review the local working-tree diff and return annotated feedback. No PR is needed. |
+| `/plannotator-review --git` | View the local Git working-tree diff; annotate if desired. No plan or PR is needed. |
 | `/plannotator-review <PR-URL>` | Inspect an existing published PR. Posting a review or comments is a separate, explicit action. |
 | `/plannotator-annotate path/to/plan.md` | Review a Markdown artifact. |
 | `/plannotator-last` | Annotate an explanation from the conversation. |
+
+For viewer-only use, run `/plannotator-review --git` in Pi, inspect tracked and
+untracked changes, then choose **Close review without feedback**. Closing stops
+the review listener without sending a message to the model. No plan, approval,
+implementation request, or published PR is required. Sending annotations is a
+separate handoff for discussion; it is not necessary just to read a diff.
 
 On narrow screens, close the annotation panel and sidebar to read the plan;
 the green approval button is labeled **OK**. Browser viewport checks are not a
@@ -263,7 +269,39 @@ branch, files, or running processes**. Keep exploratory work read-only, or isola
 experiments explicitly. Summaries preserve hypotheses and evidence; they do not
 turn an agent suggestion or an external document into user policy.
 
-## Auditing, context, and terminal behavior
+## Context and subscription cache reuse
+
+Inspection text defaults to 12 KiB per result and 64 KiB retained across results.
+Text-only `read`, `bash`, `grep`, `find`, and `ls` results share this allowance;
+image/mixed results, other tool names, and conversation messages pass through.
+Full stored/UI results and metadata remain intact. Configure
+`PI_CONTEXT_TOOL_RESULT_BYTES` (4096–51200) and
+`PI_CONTEXT_TOOL_RESULTS_TOTAL_BYTES` (16384–524288).
+
+The model receives a contiguous newest suffix of eligible inspection text.
+Once a result cannot fit, it and all earlier eligible results receive omission
+notices. The remaining allowance may be underfilled: older small results are
+not used to fill gaps. With fixed limits and append-only history, earlier
+omissions stay identical rather than reappearing near the start of the prompt.
+Fresh evidence remains eligible on every call; this is not a lifetime quota.
+Omission-notice overhead is separate from the retained-text allowance.
+
+Eviction still changes the prompt near the recent-evidence boundary. Compaction,
+branch changes, model/tool/prompt changes, and provider cache expiry can also
+break reuse. These bounds therefore cannot guarantee cache hits or subscription
+savings. Use existing Pi session assistant-usage records to distinguish active
+work from idle gaps, accounting for model and context changes.
+
+[Codex pricing](https://developers.openai.com/codex/pricing) describes caching as
+one factor in usage. API-dollar estimates, credit-metered rates, and cache-hit
+percentages are not measurements of an included subscription allowance saved.
+This package makes no idle keepalive requests. A quota-consuming warming
+experiment needs separate authorization and must account for all probes,
+failures, resumed work, sessions that never resume, concurrent usage, and
+allowance resets. A client timeout or a request for one output token does not
+establish a hard quota cap.
+
+## Auditing and terminal behavior
 
 - `anti_slop` / `/anti-slop` scans tracked R/C files in a Git directory, or
   recognized files recursively outside Git. Complexity **≥15 warns**. Optional
@@ -271,10 +309,6 @@ turn an agent suggestion or an external document into user policy.
   and truncation. This is structural review, not semantic equivalence or a proof
   that a copied tree represents the repository. See the
   [rule policy](../skills/r-c-anti-slop/SKILL.md).
-- Inspection text defaults to 12 KiB per result and 64 KiB retained across results.
-  Full stored/UI results remain intact; fresh evidence displaces old context.
-  Eviction can invalidate cached prefixes. Configure `PI_CONTEXT_TOOL_RESULT_BYTES`
-  (4096–51200) and `PI_CONTEXT_TOOL_RESULTS_TOTAL_BYTES` (16384–524288).
 - `mandatory-skills` loads `no-ghosts` and `native-tool-discipline` into every
   system prompt. They govern final-artifact wording and native tool selection.
 - `expert-discipline` appends stable decision-review instructions. It cannot

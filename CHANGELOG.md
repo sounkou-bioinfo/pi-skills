@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Retain a contiguous newest suffix of inspection text in `context-budget` so earlier omission notices stay byte-stable as append-only history grows. Document cache and subscription-measurement limits and viewer-only local diff review with `/plannotator-review --git`.
 - Define R-native coding idioms, language-object construction, dispatch, and contract-directed validation in the `we-use-r-damnit` skill.
 - Apply `no-ghosts` and `native-tool-discipline` through an idempotent mandatory-skills prompt hook.
 - Ban `suppressWarnings(as.integer(...))` in the Tree-sitter R anti-slop rules, including namespaced and parenthesized forms, and replace the analyzer's own suppressed integer parsing with explicit type, finiteness, integrality, and range validation.

@@ -44,6 +44,91 @@ test("aggregate budget retains newest inspection evidence and receipts older res
   assert.match(messages[0].content[0]?.text ?? "", /^0-/, "stored source messages are not mutated");
 });
 
+test("inspection text is retained as a contiguous newest suffix without older backfill", () => {
+  const messages = [200, 900, 300].map((bytes, index) => ({
+    role: "toolResult", toolName: "read", toolCallId: String(index),
+    content: [{ type: "text", text: String(index).repeat(bytes) }],
+  }));
+  const before = boundInspectionResults(messages.slice(0, 2), 1000, 1000);
+  const after = boundInspectionResults(messages, 1000, 1000);
+  assert.match(before[0].content[0].text, /earlier read result/);
+  assert.deepEqual(after[0], before[0], "the earlier omission remains byte-for-byte stable");
+  assert.match(after[1].content[0].text, /earlier read result/);
+  assert.equal(after[2], messages[2], "fresh evidence is retained even with unused budget");
+});
+
+test("append-only mixed-size histories preserve omitted prefixes and bounded fresh evidence", () => {
+  const messages = [200, 900, 300, 800, 0, 1, 1000, 1250, 160, 999, 50, 2100].map((bytes, index) => ({
+    role: "toolResult", toolName: "read", toolCallId: String(index),
+    content: [{ type: "text", text: "x".repeat(bytes) }],
+  }));
+  let previous: typeof messages = [];
+  for (let length = 1; length <= messages.length; length++) {
+    const current = boundInspectionResults(messages.slice(0, length), 1000, 1000);
+    const cutoff = previous.map((message) => message.content[0].text.startsWith("[Context budget: earlier")).lastIndexOf(true);
+    assert.deepEqual(current.slice(0, cutoff + 1), previous.slice(0, cutoff + 1), `stable prefix at length ${length}`);
+    assert.deepEqual(current.at(-1), boundToolResult(messages[length - 1], 1000), `fresh evidence at length ${length}`);
+    previous = current;
+  }
+});
+
+test("shortened and independent branch histories recompute their own retained suffix", () => {
+  const messages = [200, 900, 300].map((bytes, index) => ({
+    role: "toolResult", toolName: "read", toolCallId: String(index),
+    content: [{ type: "text", text: "x".repeat(bytes) }],
+  }));
+  const full = boundInspectionResults(messages, 1000, 1000);
+  const shortened = messages.slice(0, 1);
+  const branch = [messages[0], { ...messages[2], toolCallId: "branch" }];
+  assert.deepEqual(boundInspectionResults(shortened, 1000, 1000), shortened);
+  assert.deepEqual(boundInspectionResults(branch, 1000, 1000), branch);
+  assert.deepEqual(boundInspectionResults(messages, 1000, 1000), full);
+});
+
+test("UTF-8 text and part separators fill the exact budget; earlier empty results stay omitted", () => {
+  const messages = ["", "🙂", "é", "abcd"].map((text, index) => ({
+    role: "toolResult", toolName: "read", toolCallId: String(index),
+    content: [{ type: "text", text }],
+  }));
+  messages[2].content.push({ type: "text", text: "€" });
+  const source = structuredClone(messages);
+  const bounded = boundInspectionResults(messages, 10, 10);
+  assert.match(bounded[0].content[0].text, /earlier read result \(0 bytes/);
+  assert.match(bounded[1].content[0].text, /earlier read result \(4 bytes/);
+  assert.equal(bounded[2], messages[2]);
+  assert.equal(bounded[3], messages[3]);
+  assert.equal(bounded.slice(2).reduce((bytes, message) =>
+    bytes + Buffer.byteLength(message.content.map((part) => part.text).join("\n"), "utf8"), 0), 10);
+  assert.deepEqual(messages, source);
+});
+
+test("aggregate selection preserves metadata and excludes conversation, extension and mixed-image content", () => {
+  const evicted = {
+    role: "toolResult", toolName: "bash", toolCallId: "evicted", isError: true,
+    content: [{ type: "text", text: "x".repeat(900) }],
+    details: { fullOutputPath: "/tmp/full-output" }, timestamp: 42,
+  };
+  const older = { role: "toolResult", toolName: "read", toolCallId: "older", content: [{ type: "text", text: "a".repeat(200) }] };
+  const fresh = { ...older, toolCallId: "fresh", content: [{ type: "text", text: "b".repeat(300) }] };
+  const excluded = [
+    { role: "user", content: [{ type: "text", text: "user request" }] },
+    { role: "assistant", content: [{ type: "text", text: "assistant response" }] },
+    { role: "toolResult", toolName: "memory", content: [{ type: "text", text: "m".repeat(9000) }] },
+    { role: "toolResult", toolName: "read", content: [{ type: "image", data: "image" }] },
+    { role: "toolResult", toolName: "read", content: [{ type: "text", text: "i".repeat(9000) }, { type: "image", data: "image" }] },
+  ];
+  const messages = [evicted, older, ...excluded, fresh];
+  const source = structuredClone(messages);
+  const bounded = boundInspectionResults(messages, 1000, 1000);
+  assert.notEqual(bounded[0], evicted);
+  assert.deepEqual({ ...bounded[0], content: evicted.content }, evicted);
+  assert.equal(bounded[1], older, "excluded content does not consume the retained-text allowance");
+  for (let index = 0; index < excluded.length; index++) assert.equal(bounded[index + 2], excluded[index]);
+  assert.equal(bounded.at(-1), fresh);
+  assert.deepEqual(messages, source);
+  assert.deepEqual(boundInspectionResults(messages, 1000, 1000), bounded);
+});
+
 test("context hook does not persist or accumulate bounded copies", async () => {
   let handler: any;
   contextBudgetExtension({ on(name: string, value: any) { if (name === "context") handler = value; } } as any);

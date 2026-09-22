@@ -54,16 +54,20 @@ where the skill is available. The full workflow loads when relevant;
 routine mechanical edits stay lightweight.
 
 Review plans and changes locally with
-[Plannotator](https://github.com/backnotprop/plannotator). Publish
-branches or GitHub PR stacks only when explicitly requested, after local
-review and tests. The integration uses loopback listeners and private
-forwarding for development servers; it preserves VS Code’s browser
-helper.
+[Plannotator](https://github.com/backnotprop/plannotator). For a local
+diff viewer without a plan or PR, run `/plannotator-review --git` in Pi;
+[close without feedback](docs/operations.md#local-review) when finished
+inspecting. Publish branches or GitHub PR stacks only when explicitly
+requested, after local review and tests. The integration uses loopback
+listeners and private forwarding for development servers; it preserves
+VS Code’s browser helper.
 
 Keep `completions` enabled alongside background tasks and RLM. Reading a
 terminal result suppresses its pending notice; unread notices are
 batched when Pi is idle. See [operating notes](docs/operations.md) for
-silent polling, limits, and storage.
+silent polling, limits, and storage, and [context/cache
+behavior](docs/operations.md#context-and-subscription-cache-reuse) for
+inspection bounds and subscription-measurement limits.
 
 ## Development
 
