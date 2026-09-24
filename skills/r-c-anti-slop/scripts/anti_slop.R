@@ -13,6 +13,7 @@ rule_defaults <- c(
   "r-identical-if-branches" = "warning",
   "r-private-helper-usage" = "warning",
   "r-single-use-predicate-helper" = "warning",
+  "r-one-use-local-closure" = "warning",
   "r-scalar-validator-helper" = "warning",
   "r-path-threat-model" = "warning",
   "r-conditional-sprawl" = "warning",
@@ -656,6 +657,47 @@ find_r_single_use_predicate_helper <- function(root, path, severity, call_scope)
   findings
 }
 
+find_r_one_use_local_closure <- function(root, path, severity) {
+  findings <- list()
+  walk_tree(root, function(outer) {
+    if (!identical(node_type(outer), "function_definition")) return()
+    body <- r_function_body(outer)
+    if (is.null(body) || !identical(node_type(body), "braced_expression")) return()
+    for (statement in node_named_children(body)) {
+      if (!identical(node_type(statement), "binary_operator") ||
+          !node_name(node_field(statement, "operator")) %in% c("<-", "=")) next
+      name <- node_field(statement, "lhs")
+      value <- node_field(statement, "rhs")
+      if (is.null(name) || !identical(node_type(name), "identifier") ||
+          is.null(value) || !identical(node_type(value), "function_definition")) next
+      uses <- list()
+      walk_tree(body, function(node) {
+        if (!identical(node_type(node), "identifier") || !identical(node_name(node), node_name(name))) return()
+        if (identical(node_location(node), node_location(name))) return()
+        uses[[length(uses) + 1L]] <<- node
+      })
+      if (length(uses) != 1L) next
+      use <- uses[[1]]
+      call <- node_parent(use)
+      if (is.null(call) || !identical(node_type(call), "call") ||
+          !identical(node_name(node_field(call, "function")), node_name(name))) next
+      ancestor <- node_parent(call)
+      inside_nested_function <- FALSE
+      while (!is.null(ancestor) && !identical(node_location(ancestor), node_location(body))) {
+        if (identical(node_type(ancestor), "function_definition")) inside_nested_function <- TRUE
+        ancestor <- node_parent(ancestor)
+      }
+      if (inside_nested_function) next
+      findings[[length(findings) + 1L]] <<- new_finding(
+        "r-one-use-local-closure", severity,
+        sprintf("Local function %s is directly called once inside its enclosing function. Review its lexical state, evaluation timing, callback role, and scoped effects before keeping the closure or simplifying a trivial wrapper.", node_name(name)),
+        path, statement
+      )
+    }
+  })
+  findings
+}
+
 find_r_scalar_validator_helper <- function(root, path, severity) {
   findings <- list()
   definitions <- r_top_level_function_definitions(root)
@@ -728,7 +770,7 @@ find_r_cyclomatic_complexity <- function(root, path, severity) {
     findings[[length(findings) + 1L]] <<- new_finding(
       "r-cyclomatic-complexity", severity,
       sprintf(
-        "R function %s has cyclomatic complexity %d; the policy requires less than 15. Reduce control-flow paths or justify the irreducible decision structure.",
+        "R function %s has cyclomatic complexity %d (review threshold: 15). In the consistency second pass, inspect its decision structure; simplify when that clarifies the contract, or retain it with a reason.",
         if (nzchar(name)) name else "<anonymous>", complexity
       ),
       path, node
@@ -743,7 +785,7 @@ find_r_conditional_sprawl <- function(root, path, severity) {
     new_finding(
       "r-conditional-sprawl", severity,
       sprintf(
-        "This boolean expression has %d atomic clauses. State and justify its one decision/admission invariant; assigning it to a one-use alias does not reduce the decision structure.", count
+        "This boolean expression has %d atomic clauses (review threshold: more than 3). In the consistency second pass, inspect the decision it expresses; assigning it to a one-use alias does not simplify it.", count
       ),
       path, expression
     )
@@ -910,6 +952,7 @@ findings_for_language <- function(root, language, path, rules, private_helper_ca
       "r-identical-if-branches" = find_r_identical_if_branches,
       "r-private-helper-usage" = find_r_private_helper_usage,
       "r-single-use-predicate-helper" = find_r_single_use_predicate_helper,
+      "r-one-use-local-closure" = find_r_one_use_local_closure,
       "r-scalar-validator-helper" = find_r_scalar_validator_helper,
       "r-path-threat-model" = find_r_path_threat_model,
       "r-conditional-sprawl" = find_r_conditional_sprawl,

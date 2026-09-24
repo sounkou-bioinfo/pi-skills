@@ -7,7 +7,10 @@
   and verification local; push branches, publish PRs/stacks or remote reviews,
   trigger remote CI, or merge only when the user explicitly requests it.
   Preserve private VS Code Remote-SSH access.
-- Apply [We Use R Damnit](skills/we-use-r-damnit/SKILL.md) whenever writing, editing, reviewing, or generating R code.
+- Apply [We Use R Damnit](skills/we-use-r-damnit/SKILL.md) whenever writing,
+  editing, reviewing, or generating R code. For changed R source, run
+  [anti-slop](skills/r-c-anti-slop/SKILL.md) as a mandatory consistency second
+  pass after behavior checks, not a first-pass score target.
 - For runtime/contract changes, use [the QA standard](EXTENSION_QA_STANDARD.md)
   and the affected rows of [TEST_PLAN.md](TEST_PLAN.md). For test commands,
   prerequisites, or a new harness, consult [the playbook](EXTENSION_TESTING_PLAYBOOK.md).

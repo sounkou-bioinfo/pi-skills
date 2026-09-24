@@ -39,6 +39,11 @@ unnecessary large intermediate. Use `seq_along()` for possibly empty inputs.
 A function names a coherent operation. A helper earns its place by clarifying
 that operation or owning a repeated named invariant. Keep simple local
 expressions local; avoid forwarding layers and miniature validation frameworks.
+A directly invoked local closure (`f <- function(...) ...; f(...)`) deserves
+review even when it does more than validate an argument. Keep it when its
+lexical state, evaluation timing, callback role, or scoped effects have a
+purpose; do not introduce one merely to repackage an operation or evade a
+helper warning.
 
 Closures capture configuration naturally. This reusable shift captures the
 offset's value at construction:
@@ -86,8 +91,9 @@ Respect established S3/S4 APIs; for S7 work, apply the
 [S7 contract](../s7-development/SKILL.md).
 
 In S7, properties own field constraints, object validators own relationships
-between fields, and methods implement behavior. External interface admission
-belongs to the project's admission mechanism, such as `s7contract` where used.
+between fields, and methods implement behavior. A consumer may use `s7contract`
+when it needs a shared behavioral interface across implementations; repeated
+syntax alone does not establish that need.
 Keep these responsibilities distinct. A new dependency or class needs a semantic
 purpose beyond wrapping an ordinary value.
 
@@ -95,24 +101,24 @@ purpose beyond wrapping an ordinary value.
 
 Validate at public admission and trust or representation transitions. Within an
 established contract, write the operation rather than checking the same facts
-again. A simple public argument can have a simple guard:
+again. Let S7 properties/constructors own structured objects; use a simple
+`checkmate` assertion for a plain argument when that dependency is already part
+of the package:
 
 ```r
 labelled <- function(x, label) {
-  if (!is.character(label) || length(label) != 1L || is.na(label)) {
-    stop("`label` must be one non-missing string.", call. = FALSE)
-  }
+  checkmate::assert_string(label)
   structure(x, label = label)
 }
 ```
 
 Choose checks from the requirement:
 
-| Requirement | R mechanism |
+| Requirement | Check at its owner |
 |---|---|
 | Numeric semantics | `is.numeric()` plus the domain restrictions the operation needs, including real-only or class restrictions where relevant. |
 | Integer-valued number | Finiteness and integrality; `is.integer()` tests integer type, so it rejects `1` and accepts `1L`. |
-| Exact native representation | `typeof()` plus the required shape, class, width, and ownership checks. |
+| Exact native representation | Native entry points check type, shape, width, and ownership before access; use `typeof()` in R only for a separate R-level contract. |
 | Class membership | The object system's membership predicate, such as `inherits()` for S3; use dispatch for behavior. |
 | Scalar cardinality | `length(x) == 1L` where the interface actually requires a scalar. |
 | Missing values | `is.na()` for a known scalar, `anyNA()` for a vector, or the operation's explicit missing-value policy. |
@@ -128,9 +134,31 @@ native width. Coercion is an explicit API decision, not validation;
 `suppressWarnings(as.integer(x))` is banned.
 
 Use the existing admission library for substantial schemas. Keep a small guard
-local unless it represents a genuinely shared invariant. R-side admission does
-not replace C-side memory-safety, allocation, width, or lifetime checks at a
-native entry point.
+local unless it represents a genuinely shared invariant. When repeated scalar
+checks appear across functions in an R package, the optional read-only
+[consumer opportunity report](../s7-development/scripts/consumer_opportunities.R)
+provides bounded file/line evidence. Resolve the script relative to its skill;
+compare callers and the actual admission owner before moving a check into a
+constructor, property, or shared helper. Matching predicate names alone do not
+establish a shared contract.
+
+## Be Like Charlie Gao
+
+In [nanonext](https://github.com/r-lib/nanonext), R presents sockets and async
+operations while C owns native handles, transport, serialization, and cleanup.
+Place policy and composition in R; validate representation, width, and lifetime
+where native code must rely on them. Reuse the underlying library rather than
+rebuilding its machinery. Keep native pointer ownership, failure cleanup, and
+calls into that library legible. A short `.Call` wrapper is a consequence of
+clear ownership, not a target for every R function.
+
+Choose the failure channel from the consumer contract. An expected, recoverable
+transport failure can be a classed error value, distinct from an ordinary
+integer result; a pending async operation is a separate state. An adapter such
+as a promise can translate that value into a condition. Invalid inputs and
+operations without a useful failure value can signal conditions directly.
+Do not impose errors-as-values on ordinary R functions or repeat native safety
+checks in R without a separate R-level contract.
 
 ## Errors and effects have owners
 
@@ -153,6 +181,15 @@ missing-value, attribute, dispatch, evaluation-environment, or lifetime cases.
 State final behavior in test names and assertions. Use the project's formatter
 and linter for mechanics, not as the definition of good design.
 
-Treat anti-slop diagnostics as review evidence. Splitting conditions or hiding
-them in helpers to meet a threshold does not simplify a contract. A clean scan
+After a behaviorally coherent first pass and affected tests, run the
+[anti-slop audit](../r-c-anti-slop/SKILL.md) as a mandatory consistency second
+pass on the changed R source (use the package scope when cross-function evidence
+matters). Review conditional clause counts and cyclomatic complexity then, not
+while designing the operation. Inspect each finding against the contract and
+behavior: clarify a genuinely tangled decision, or keep and justify code whose
+structure serves it. A warning does not require a score below its threshold.
+
+Splitting conditions or hiding them in helpers, including one-use local closures,
+to meet a threshold does not simplify a contract. Direct boolean aliases and
+one-use local closures are reviewable syntax, not proof of motive. A clean scan
 cannot establish correctness, clarity, or mature R idiom.

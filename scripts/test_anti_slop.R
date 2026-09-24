@@ -120,7 +120,9 @@ aliased_condition_findings <- Filter(
 aliased_condition_checks <- c(
   length(aliased_condition_findings) == 2L,
   all(vapply(aliased_condition_findings, function(finding) {
-    grepl("!is.null(nm)", finding$excerpt, fixed = TRUE)
+    identical(finding$severity, "warning") &&
+      grepl("!is.null(nm)", finding$excerpt, fixed = TRUE) &&
+      grepl("consistency second pass", finding$message, fixed = TRUE)
   }, logical(1)))
 )
 if (!all(aliased_condition_checks)) {
@@ -216,6 +218,29 @@ expect_identical(
   "Translated scalar validators, sprawling predicates, one-use predicate chains, and false path threat models must be diagnosed"
 )
 
+local_closure_path <- file.path(work, "local-closure.R")
+writeLines(c(
+  "wrapped <- function(x) { local_check <- function() is.character(x); if (local_check()) x else NULL }",
+  "nested <- function(x) { local_check <- function(y) is.character(y); local_check(x) }",
+  "callback <- function(x) { local_check <- function(y) is.character(y); lapply(x, local_check) }",
+  "shared <- function(x) { local_check <- function(y) is.character(y); local_check(x); local_check(x) }",
+  "escaped <- function(x) { local_check <- function(y) is.character(y); local_check }",
+  "assigned <- function(x) { local_check <- function(y) is.character(y); local_check <- identity; local_check(x) }",
+  "effects <- function(x) { tick <- function() { x <<- x + 1L; x }; tick() }",
+  "split <- function(x) {",
+  "  type_ok <- function() is.character(x) && length(x) == 1L",
+  "  value_ok <- function() !is.na(x) && nzchar(x)",
+  "  if (type_ok() && value_ok()) x else NULL",
+  "}"
+), local_closure_path)
+local_closure_result <- parse_result(local_closure_path)
+local_closure_findings <- Filter(function(finding) identical(finding$rule, "r-one-use-local-closure"), local_closure_result$findings)
+expect_identical(
+  vapply(local_closure_findings, `[[`, integer(1), "line"),
+  c(1L, 2L, 7L, 9L, 10L),
+  "Direct one-use closures, including those with scoped effects or split predicates, are review signals; callbacks, repeated calls, escaped bindings, and rebinding are not"
+)
+
 reused_predicate_path <- file.path(work, "reused-predicate.R")
 writeLines(c(
   "is_nonempty <- function(value) is.character(value) && nzchar(value)",
@@ -257,17 +282,19 @@ writeLines(c(
 ), complexity_r_path)
 complexity_r_result <- parse_result(complexity_r_path)
 complexity_findings <- Filter(function(finding) identical(finding$rule, "r-cyclomatic-complexity"), complexity_r_result$findings)
-expect_identical(length(complexity_findings), 3L, "Complexity 14 must pass; complexity 15 must fail, including cyclocomp control constructs and a nested function scored independently")
+expect_identical(length(complexity_findings), 3L, "Complexity 15 triggers review, including cyclocomp control constructs and nested functions scored independently; complexity 14 does not")
 complexity_messages <- vapply(complexity_findings, `[[`, character(1), "message")
 complexity_checks <- c(
   any(grepl("complexity_15 has cyclomatic complexity 15", complexity_messages, fixed = TRUE)),
   any(grepl("cyclocomp_constructs_16 has cyclomatic complexity 16", complexity_messages, fixed = TRUE)),
   any(grepl("inner has cyclomatic complexity 16", complexity_messages, fixed = TRUE)),
   !any(grepl("vectorized_and_ifelse_do_not_count has cyclomatic complexity", complexity_messages, fixed = TRUE)),
-  !any(grepl("outer has cyclomatic complexity", complexity_messages, fixed = TRUE))
+  !any(grepl("outer has cyclomatic complexity", complexity_messages, fixed = TRUE)),
+  all(grepl("consistency second pass", complexity_messages, fixed = TRUE)),
+  all(vapply(complexity_findings, function(finding) identical(finding$severity, "warning"), logical(1)))
 )
 if (!all(complexity_checks)) {
-  fail("Cyclomatic diagnostics must enforce complexity below 15 and exclude nested bodies from the outer score")
+  fail("Cyclomatic diagnostics must mark complexity 15 and above for consistency review and exclude nested bodies from the outer score")
 }
 
 c_path <- file.path(work, "redundant.c")
