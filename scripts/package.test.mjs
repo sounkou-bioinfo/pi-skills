@@ -10,6 +10,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const documents = [
   "README.md", "README.Rmd", "AGENTS.md", "CHANGELOG.md",
   "EXTENSION_QA_STANDARD.md", "EXTENSION_TESTING_PLAYBOOK.md", "TEST_PLAN.md",
+  "vendor/pi-claude-code/UPSTREAM.md",
 ];
 
 async function filesUnder(directory) {
@@ -57,8 +58,9 @@ test("pack includes runtime sources, review assets, prompts, skills and license 
   assert.deepEqual(manifest.pi.prompts, ["./prompts"]);
   const required = [...documents, ...docs, "LICENSE"];
   for (const asset of ["index.ts", "plannotator.json", "plannotator.html", "review-editor.html"]) required.push(`node_modules/@plannotator/pi-extension/${asset}`);
-  for (const directory of ["extensions", "skills", "prompts", "scripts", "vendor/pi-background-tasks"]) {
-    required.push(...(await filesUnder(directory)).filter((file) => !file.endsWith(".test.ts")));
+  assert(manifest.pi.extensions.includes("./vendor/pi-claude-code/src/index.ts"));
+  for (const directory of ["extensions", "skills", "prompts", "scripts", "vendor/pi-background-tasks", "vendor/pi-claude-code"]) {
+    required.push(...(await filesUnder(directory)).filter((file) => !file.endsWith(".test.ts") && !file.endsWith("/.gitignore")));
   }
   for (const file of required) assert(packed.has(file), `missing packed asset: ${file}`);
   for (const file of packed) {

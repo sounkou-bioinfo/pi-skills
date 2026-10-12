@@ -18,6 +18,38 @@ not an installer. Finish live work before updating/reloading extensions.
 | Optional Jarl audit | Separately installed [Jarl](https://github.com/etiennebacher/jarl); request it explicitly. |
 | Memory | DuckDB SQLite and FTS extensions; matching artifacts may need downloading on a cold cache. |
 | Local review | A browser locally or through VS Code Remote-SSH forwarding; Git for diff review. Plannotator requires Pi >=0.79.1. |
+| Claude Code subscription | Official `claude` CLI on `PATH`, authenticated separately with `claude auth login`; a Claude subscription. |
+
+## Claude Code subscription
+
+The [vendored pi-claude-code provider](../vendor/pi-claude-code/UPSTREAM.md)
+routes Claude requests through the official Claude Code CLI. Pi owns tools and
+conversation state; Claude Code owns authentication. Select **Claude Code
+Subscription (Experimental)** in Pi and use `/claude-code-status` to check the
+CLI and login. Models remain hidden when Claude Code is unavailable or logged out.
+
+Load one copy. If the standalone upstream package is configured, remove it before
+reloading pi-skills:
+
+```sh
+pi remove https://github.com/earendil-works/pi-claude-code
+```
+
+The package resource is `vendor/pi-claude-code/src/index.ts`; Pi package filters
+can disable it. `PI_CLAUDE_CODE_COMMAND` selects the CLI executable and
+`PI_CLAUDE_CODE_CONFIG_DIR` selects its configuration directory. These settings
+do not copy credentials into Pi.
+
+The integration is experimental and subscription billing may change; read the
+[upstream warning](../vendor/pi-claude-code/README.md). Usage-credit/overage events
+fail by default. `PI_CLAUDE_CODE_ALLOW_USAGE_CREDITS` explicitly opts into those
+charges. Inherited API-key, proxy, and cloud-provider overrides are rejected to
+avoid silently changing authentication or billing. Local fixtures verify
+packaging and protocol behavior, not live subscription eligibility or cost.
+
+The snapshot is pinned and generated from a [manifest, patches, and overlay](../scripts/vendor/pi-claude-code/manifest.json).
+Updates are explicit maintenance operations; installation and reload do not
+fetch upstream source or apply patches.
 
 ## Background tasks and completions
 

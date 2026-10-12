@@ -33,6 +33,7 @@ grammars. See [runtime requirements and configuration](docs/operations.md).
 | Capability | Entry points / source |
 |---|---|
 | Background shell tasks and task dock | `bg_run`, `bg_status`, `bg_logs`, `bg_kill`; [manager](vendor/pi-background-tasks/UPSTREAM.md) |
+| Claude subscription through the official Claude Code CLI | [Vendored provider](vendor/pi-claude-code/UPSTREAM.md); [setup and billing limits](docs/operations.md#claude-code-subscription) |
 | Long-context analysis with JavaScript and system R | [rlm](extensions/rlm) |
 | Project/global notes, scoped history, and recall | [memory](docs/memory.md) |
 | Local plan and diff review, including VS Code Remote-SSH | [Plannotator integration](extensions/plannotator); [operating guide](docs/operations.md#local-review) |
@@ -86,6 +87,7 @@ playbook's change-scoped checks during editing.
 ## License
 
 MIT for first-party code; the vendored background manager is
-[ISC-licensed](vendor/pi-background-tasks/LICENSE). Plannotator is bundled from
+[ISC-licensed](vendor/pi-background-tasks/LICENSE). The vendored Claude Code provider is
+[MIT-licensed, copyright Armin Ronacher](vendor/pi-claude-code/LICENSE). Plannotator is bundled from
 upstream with [MIT OR Apache-2.0 notices and provenance](extensions/plannotator/UPSTREAM.md);
 dependency notices remain with their packages.

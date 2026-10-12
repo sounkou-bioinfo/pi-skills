@@ -33,6 +33,8 @@ npm run test:memory             # native memory and projection tests
 npm run test:memory-design      # evaluated design figures and source-limit diagnostics
 npm run test:anti-slop          # tool adapter + native R/C analyzer fixtures
 npm run test:package            # doc links, declared assets, npm pack inventory
+npm run check:claude-code-vendor # offline pristine hashes and patch/overlay replay
+npm run test:claude-code        # upstream fixtures, typecheck, clean install and host-loader regression
 ```
 
 After editing `README.Rmd`, run `npm run render:readme` and `npm run check:readme`.
@@ -45,6 +47,36 @@ missing or unsupported inputs.
 Other focused test commands are listed in [package.json](package.json).
 Run gates serially: existing TypeScript suites use fixed build directories and
 are not safe to run concurrently in the same checkout.
+
+## Claude Code vendor
+
+[Vendor provenance](vendor/pi-claude-code/UPSTREAM.md) describes the pinned source,
+ordered compatibility patch, overlay, and explicit refresh command.
+`npm run check:claude-code-vendor` needs Node and Git but no upstream checkout or
+network. Generation from an upstream checkout additionally uses `tar`.
+
+`npm run test:claude-code` checks vendor drift detection, copies the snapshot into
+a temporary development package, installs upstream's locked dependencies with
+`npm ci --ignore-scripts`, and runs its typecheck and fixture suite. It then packs
+pi-skills, installs a temporary runtime-only consumer without host peers, and
+loads only the manifest-declared Claude Code resource in a fresh host process.
+It asserts one provider, its model catalog, the status command, and no loader
+warnings/errors; reversing the compatibility patch must reproduce the missing
+`anthropic.models` import. All subprocesses have parent-side deadlines.
+
+The default loader host is the upstream lock's development Pi version. To check
+another installed host explicitly:
+
+```sh
+PI_CLAUDE_CODE_HOST_DIR=/path/to/node_modules/@earendil-works/pi-coding-agent npm run test:claude-code
+```
+
+These tests may contact npm to provision isolated dependencies. Use
+`npm_config_offline=true` once the required packages are cached. Host loading uses
+an isolated HOME and agent directory with `PI_OFFLINE=1`; no real Claude login,
+model requests, or paid-service checks run. The upstream fixture suite uses local
+CLI/HTTP fixtures. Full agent-loop, interactive, lifecycle, and live subscription
+behavior remain separate coverage gaps.
 
 ## Optional fresh-Pi memory source smoke
 

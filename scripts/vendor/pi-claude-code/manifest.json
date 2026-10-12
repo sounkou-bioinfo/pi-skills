@@ -1,0 +1,36 @@
+{
+  "repository": "https://github.com/earendil-works/pi-claude-code",
+  "revision": "0065a1f5a5e1f2214c87dcf2cdf7d66180b79459",
+  "archiveSha256": "6e5edbcf16c6e6b3e233bbf9953c69152b5db6dd8ca324a8ad7fd16e9da1884b",
+  "patches": [
+    "0001-host-model-catalog.patch"
+  ],
+  "overlays": [
+    "UPSTREAM.md"
+  ],
+  "files": {
+    ".gitignore": "39336741225a9c1f9190936351cf91db51cfc6a3eb5480f48cec36e8db114852",
+    "ARCHITECTURE.md": "e91b50d51b7593904758ebcdd08377e590ec4c7b2275921f9da7dca747f637aa",
+    "LICENSE": "e2233b09ee58593cff819b9167ea8fbfdd8d8b10633839549b863941146eb9da",
+    "package-lock.json": "85302b1efa43b9e0586f8b43a5ed250333691da6d695ced1fac59647ae74ea10",
+    "package.json": "a2f84b48b7c29f04bc518190018059e868bd5c59869253da31838189b38623ea",
+    "README.md": "c3a000c0e4c379ca81a47ee27695b3d814b04f3e1e7431473bc7c8c90dba10f0",
+    "src/billing.ts": "1a2b76509a2513e84eb88c5b3e4ec3a7d66700f190a661a7b0bd82b456b85167",
+    "src/claude-cli.ts": "121237e175cc7384a3b9bf90c68bb7fed61a9327aaf20bc6e9c9c14f1c75546c",
+    "src/env.ts": "52b4985e821322653ffee7b43a9bee8a434fe84491ab7e4e8c65c777fcaee40d",
+    "src/index.ts": "b9d0dffd0b18727fb6b63ad061f88fc3ddef6b715b3c490ed55226cf4565558c",
+    "src/inert-mcp.mjs": "36c93a4e218dc803e83ca37da37631b106f3b5a83fbea777579f4aa3927d0518",
+    "src/model-catalog.ts": "e8c4989b5998ed22e86a1da7fc93a65516828ef80d0bb8863e9d51cf92774fbb",
+    "src/native-types.ts": "d9c29f297a8166b6a2d05dce2ac4af486912a051d18959c2ff68e23a3b8ad5fa",
+    "src/provider.ts": "be4e97b128afa126a26087f6ec093df05e78a25f6b948c8dd765fb8d3dbcbc32",
+    "src/stream.ts": "fd222cee77ab00147ea70af86ed52ca6188690583da61fe7d675c5bd60fe273d",
+    "src/transcript.ts": "7ae9f0797f09ed037b6bca11502d70ab56f5057d4934bdf1b5cfd4e34e63b593",
+    "src/turn-relay.ts": "33604bb8618f0a0d8ac93bc9b7a058fca43f75d516b36ff6f68e9d99873fb972",
+    "tests/billing.test.ts": "96d82c63196c487802b09660f6572da8a2280f91ae3b34eaccf7988f2c7149cc",
+    "tests/claude-cli.test.ts": "8e27db2de24caabbf565f3cd40c92505e6ad8a92c4fd78ae47675ecfe0711bdc",
+    "tests/model-catalog.test.ts": "096597a9529086adbf753c269d4962e8f6e9f2fe93028ac0d9f17a29dd9aacec",
+    "tests/transcript.test.ts": "478e9bcab212fc12b2deeac4f365b1ffc64e21dde8869d44da9ba2c01805c097",
+    "tests/turn-relay.test.ts": "95bd7511700df3fe3788c9ef52bca012139753cb03c978ecd904dec5ace84a7f",
+    "tsconfig.json": "a7a78e931a257d33d669abccd09fb0f80d25785c21700306ec9f99d6488cac50"
+  }
+}

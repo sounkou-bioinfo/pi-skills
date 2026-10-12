@@ -16,7 +16,7 @@ See [the QA standard](EXTENSION_QA_STANDARD.md) and
 | Real Pi SDK and native tree | [Plannotator SDK tests](scripts/plannotator.test.mjs); optional [memory source smoke](EXTENSION_TESTING_PLAYBOOK.md#optional-fresh-pi-memory-source-smoke) | Source loading, plan-mode ownership, blocked headless approval, assistant anchors, branch summaries, retained branches and non-rollback of files. General RPC/lifecycle matrices remain missing. |
 | Browser and SSH/CLI | `npm run test:plannotator:ui` | Actual Pi CLI and Chromium plan/diff review through a temporary private SSH tunnel, with a non-loopback connection check. Physical phones and the desktop VS Code forwarding UI still need manual confirmation. |
 | Scripted-provider agent loop | `npm run test:plannotator`; browser/CLI gate | Counts real SDK requests for planning and branch return; browser gate checks human approval before local writes. No live model or semantic-quality certification. |
-| Clean tarball install | `npm run test:plannotator:package` | Packed runtime dependencies and browser assets loaded through a host Pi CLI. Other native tools, platforms, and a full supported-host matrix remain separate gaps. |
+| Clean tarball install | `npm run test:plannotator:package`; `npm run test:claude-code` | Review browser/CLI assets and the Claude Code provider's clean host-loaded source. Other native tools, platforms, and a full supported-host matrix remain separate gaps. |
 
 `npm run check` combines the implemented gates for runtime/build/package handoff.
 Use the [change-scoped gates](EXTENSION_QA_STANDARD.md#gate-scope) for prose and
@@ -27,6 +27,7 @@ provisioning may need network access. Run suites serially in one checkout.
 
 | Surface | Executable evidence | Uncovered cases / next proof |
 |---|---|---|
+| Claude Code provider | [Vendor gate](scripts/test_claude_code.mjs): offline patch/overlay replay, drift rejection, upstream locked typecheck and 14 CLI/HTTP/catalog/billing/transcript fixtures, clean tarball install without host peers, fresh host-loader provider/catalog/status registration, and failure of the unpatched import. | No live Claude login, subscription/billing eligibility, end-to-end model request, interactive command UI, full session/process lifecycle, or supported-host/platform matrix. |
 | Background tools, commands, dock | [test_background_tasks.ts](scripts/test_background_tasks.ts): runtime-directory recreation, injected SIGTERM/SIGKILL close events, real shell jobs, terminal status/log headers, observed/unread notices through fake Pi. | Full command/schema failures, real external signals/process trees, timeout/output-cap races, UI actions, Windows, and actual host lifecycle. |
 | Completion queue | [completions.test.ts](extensions/completions/completions.test.ts): both observation orders, deduplication, batch bounds, session filtering, synchronous send failure, busy/idle hooks, shutdown. | Other real idle/follow-up orderings, switch/reload, asynchronous submission failure and combined extension lifecycle. |
 | RLM | [rlm.test.ts](extensions/rlm/rlm.test.ts): model/effort policy, file helpers, worker cancellation/deadline, stdin transport, real R, serialized runs, live-owner hydration, targeted result observations. | Parent-process watchdog for the test itself; worker OOM/exit/RPC failure, dead/reused owner PIDs, process-tree cleanup, end-to-end controller and clean installed-worker loading. |
@@ -141,7 +142,9 @@ boundary. Any retained manual result must identify its exact revision and scope.
 
 ## Upstream material
 
-[Vendor provenance](vendor/pi-background-tasks/UPSTREAM.md) identifies the npm
-snapshot. It includes upstream documentation but no upstream test sources.
+[Background vendor provenance](vendor/pi-background-tasks/UPSTREAM.md) identifies
+the npm snapshot, including upstream documentation but no upstream test sources.
+[Claude Code provenance](vendor/pi-claude-code/UPSTREAM.md) identifies a pinned Git
+snapshot with its upstream tests and explicit local patches/overlay.
 Local tests and gates are listed in this inventory and the
 [QA standard](EXTENSION_QA_STANDARD.md).
