@@ -64,9 +64,42 @@ test("prepares replay frames and groups tool results", () => {
   assert.equal(frames.length, 3);
   assert.equal(frames[0]?.shouldQuery, false);
   assert.equal(frames[1]?.type, "assistant");
-  assert.equal((frames[1]?.message.content[2] as { name: string }).name, `${TOOL_PREFIX}read`);
+  assert.equal((frames[1]?.message.content[2] as { id: string; name: string }).name, `${TOOL_PREFIX}read`);
+  assert.equal((frames[1]?.message.content[2] as { id: string }).id, "t1");
   assert.equal(frames[2]?.message.content.length, 2);
   assert.equal(frames[2]?.shouldQuery, undefined);
+});
+
+test("normalizes cross-provider tool IDs and preserves result linkage", () => {
+  const sourceId = `call_${"a".repeat(64)}|fc_123`;
+  const assistant: AssistantMessage = {
+    role: "assistant",
+    api: "openai-responses",
+    provider: "openai-codex",
+    model: "gpt-5.4",
+    content: [{ type: "toolCall", id: sourceId, name: "read", arguments: { path: "a" } }],
+    usage,
+    stopReason: "toolUse",
+    timestamp: 1,
+  };
+  const frames = prepareFrames([
+    { role: "user", content: "inspect", timestamp: 0 },
+    assistant,
+    {
+      role: "toolResult",
+      toolCallId: sourceId,
+      toolName: "read",
+      content: [{ type: "text", text: "A" }],
+      isError: false,
+      timestamp: 2,
+    },
+  ]);
+
+  const toolUse = frames[1]?.message.content[0] as { id: string };
+  const toolResult = frames[2]?.message.content[0] as { tool_use_id: string };
+  assert.match(toolUse.id, /^[a-zA-Z0-9_-]{1,64}$/);
+  assert.equal(toolResult.tool_use_id, toolUse.id);
+  assert.equal((assistant.content[0] as { id: string }).id, sourceId);
 });
 
 test("replays native signed blocks only while the visible projection is unchanged", () => {

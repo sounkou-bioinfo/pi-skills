@@ -19,6 +19,12 @@ uses Pi's host-mapped `providers/all` entry point. The generated
 clean package installation, even when it exists inside the host distribution.
 The patch preserves upstream Anthropic model metadata and native routing.
 
+[0002-normalize-tool-call-ids.patch](../../scripts/vendor/pi-claude-code/patches/0002-normalize-tool-call-ids.patch)
+converts incompatible or overlong historical tool-call identifiers to stable
+Claude-compatible identifiers and applies the same conversion to linked tool
+results. This keeps cross-provider transcripts valid without changing Pi's
+stored messages.
+
 This provenance file comes from the [overlay](../../scripts/vendor/pi-claude-code/overlay/UPSTREAM.md).
 Edit the manifest, ordered patches, or overlay inputs, not generated files under
 `vendor/pi-claude-code/`. There are no install-time patches or downloads.

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   getDeclaredTools,
   getInitialSystemMessage,
@@ -160,22 +161,29 @@ function canonicalAssistantContent(message: AssistantMessage): NativeContentBloc
   return blocks;
 }
 
+function normalizeToolCallId(id: string): string {
+  if (/^[a-zA-Z0-9_-]{1,64}$/u.test(id)) return id;
+  return `pi_${createHash("sha256").update(id).digest("hex").slice(0, 61)}`;
+}
+
 function assistantContent(message: AssistantMessage): NativeContentBlock[] {
   const carrier = replayCarrier(message);
+  let content: NativeContentBlock[];
   if (carrier && projectionsEqual(assistantProjection(message), carrier.projection)) {
-    return clone(carrier.message.content);
-  }
-
-  // A changed projection must not restore stale signed thinking. For messages
-  // produced by this provider without a carrier (for example an old session),
-  // canonical signed blocks are still the best available replay.
-  if (carrier) {
-    return canonicalAssistantContent({
+    content = clone(carrier.message.content);
+  } else if (carrier) {
+    // A changed projection must not restore stale signed thinking.
+    content = canonicalAssistantContent({
       ...message,
       content: message.content.filter((block) => block.type !== "thinking"),
     });
+  } else {
+    // Old messages from this provider can have signed blocks without a carrier.
+    content = canonicalAssistantContent(message);
   }
-  return canonicalAssistantContent(message);
+  return content.map((block) =>
+    block.type === "tool_use" ? { ...block, id: normalizeToolCallId(block.id) } : block,
+  );
 }
 
 export function prepareFrames(messages: Message[]): NativeFrame[] {
@@ -198,7 +206,7 @@ export function prepareFrames(messages: Message[]): NativeFrame[] {
       blocks = [
         {
           type: "tool_result",
-          tool_use_id: message.toolCallId,
+          tool_use_id: normalizeToolCallId(message.toolCallId),
           content: toolResultContent(message),
           is_error: message.isError,
         },

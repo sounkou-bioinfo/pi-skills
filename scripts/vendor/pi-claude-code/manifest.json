@@ -3,7 +3,8 @@
   "revision": "0065a1f5a5e1f2214c87dcf2cdf7d66180b79459",
   "archiveSha256": "6e5edbcf16c6e6b3e233bbf9953c69152b5db6dd8ca324a8ad7fd16e9da1884b",
   "patches": [
-    "0001-host-model-catalog.patch"
+    "0001-host-model-catalog.patch",
+    "0002-normalize-tool-call-ids.patch"
   ],
   "overlays": [
     "UPSTREAM.md"

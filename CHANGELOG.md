@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Normalize tool-call identifiers when replaying another provider's history through Claude Code. Claude-compatible identifiers are stable and limited to 64 ASCII identifier characters, and each tool result uses the same normalized identifier.
 - Require Pi 1.0 (development types 1.0.1). Supply the memory, mandatory-skills, expert-discipline, and local-review policies as named `before_agent_start` prompt sections, so Pi keeps the system prompt structured and sends later changes as section updates; none of the hooks replaces the whole prompt. SDK harnesses read the provider-visible prompt from the transcript's system message and locate the host's `pi-ai` whether nested or hoisted. Add a real-SDK memory test for prompt stability and projection placement.
 
 - Add the `simplified-technical-english` skill (ASD-STE100 writing rules, approved word list, substitutions, and examples from 0xpili/simplified-technical-english, MIT with ASD dictionary notice) and an in-process `ste_check` tool and `/ste-check` command that port its structural checker to TypeScript. Adapt the skill to bioinformatics with technical names and verbs, specific-value rules, data-oriented WARNING/CAUTION levels, and before/after examples; the checker accepts the bioinformatics term list.
