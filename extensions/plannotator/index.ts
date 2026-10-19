@@ -11,5 +11,7 @@ export default function localReview(pi: ExtensionAPI): void {
     }
   });
   plannotator(pi);
-  pi.on("before_agent_start", (event) => ({ systemPrompt: event.systemPrompt + LOCAL_REVIEW_POLICY }));
+  pi.on("before_agent_start", (event) => {
+    event.systemPromptOptions.sections.local_review_policy = LOCAL_REVIEW_POLICY;
+  });
 }

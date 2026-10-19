@@ -38,7 +38,8 @@ test("the source-loaded upstream workflow owns planning without competing goal t
     assert.equal(h.requests.length, 0, "opening plan mode does not itself start a model");
     await h.session.prompt("Explore the task without publishing anything.");
     assert.equal(h.requests.length, 1);
-    assert(h.requests[0].systemPrompt.includes(LOCAL_REVIEW_POLICY));
+    assert(h.requests[0].sections.includes("local_review_policy"), "the prompt stays structured");
+    assert(h.requests[0].systemPrompt.includes(`<local_review_policy>\n${LOCAL_REVIEW_POLICY}\n</local_review_policy>`));
     await writeFile(path.join(h.cwd, "PLAN.md"), "# Plan\n\n- [ ] Inspect the fixture.\n");
     h.frames.push([{ type: "toolCall", id: "submit-headless", name: "plannotator_submit_plan", arguments: { filePath: "PLAN.md" } }]);
     await h.session.prompt("Submit the plan.");

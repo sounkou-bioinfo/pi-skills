@@ -36,7 +36,7 @@
     "vendor:claude-code": "node scripts/vendor_claude_code.mjs",
     "check:claude-code-vendor": "node scripts/vendor_claude_code.mjs --check",
     "test:claude-code": "node scripts/test_claude_code.mjs",
-    "test": "npm run test:package && npm run test:claude-code && npm run test:background-tasks && npm run test:context-budget && npm run test:cache-telemetry && npm run test:completions && npm run test:plannotator && npm run test:memory && npm run test:rlm && npm run test:expert-discipline && npm run test:mandatory-skills && npm run test:anti-slop && npm run test:s7-opportunities && npm run test:codex-web-search && npm run test:biomedical-evidence && npm run test:memory-design",
+    "test": "npm run test:package && npm run test:claude-code && npm run test:background-tasks && npm run test:context-budget && npm run test:cache-telemetry && npm run test:completions && npm run test:plannotator && npm run test:memory && npm run test:rlm && npm run test:expert-discipline && npm run test:mandatory-skills && npm run test:anti-slop && npm run test:ste-check && npm run test:s7-opportunities && npm run test:codex-web-search && npm run test:biomedical-evidence && npm run test:memory-design",
     "test:background-tasks": "rm -rf .background-task-test-build && tsc --target ES2023 --module NodeNext --moduleResolution NodeNext --strict --skipLibCheck --esModuleInterop --types node --rootDir . --outDir .background-task-test-build scripts/test_background_tasks.ts vendor/pi-background-tasks/src/core/common.ts vendor/pi-background-tasks/src/core/registry.ts vendor/pi-background-tasks/src/extension.ts && node .background-task-test-build/scripts/test_background_tasks.js; status=$?; rm -rf .background-task-test-build; exit $status",
     "test:context-budget": "rm -rf .context-budget-test-build && tsc --noEmit false --outDir .context-budget-test-build --declaration false && node --test .context-budget-test-build/context-budget/context-budget.test.js; status=$?; rm -rf .context-budget-test-build; exit $status",
     "test:cache-telemetry": "rm -rf .cache-telemetry-test-build && tsc --noEmit false --outDir .cache-telemetry-test-build --declaration false && node --test --test-concurrency=1 .cache-telemetry-test-build/cache-telemetry/cache-telemetry.test.js scripts/cache-context.test.mjs; status=$?; rm -rf .cache-telemetry-test-build; exit $status",
@@ -45,12 +45,13 @@
     "test:plannotator:package": "node scripts/test_plannotator_package.mjs",
     "test:memory-design": "Rscript scripts/test_memory_design.R",
     "test:plannotator": "rm -rf .plannotator-test-build && tsc --noEmit false --outDir .plannotator-test-build --declaration false && node --test --test-concurrency=1 scripts/plannotator.test.mjs; status=$?; rm -rf .plannotator-test-build; exit $status",
-    "test:memory": "rm -rf .memory-test-build && tsc --noEmit false --outDir .memory-test-build --declaration false && cp extensions/memory/*.sql .memory-test-build/memory/ && node --test .memory-test-build/memory/memory.test.js; status=$?; rm -rf .memory-test-build; exit $status",
+    "test:memory": "rm -rf .memory-test-build && tsc --noEmit false --outDir .memory-test-build --declaration false && cp extensions/memory/*.sql .memory-test-build/memory/ && node --test .memory-test-build/memory/memory.test.js && node --test scripts/memory-sdk.test.mjs; status=$?; rm -rf .memory-test-build; exit $status",
     "test:rlm": "rm -rf .rlm-test-build && tsc --noEmit false --outDir .rlm-test-build --declaration false && cp extensions/rlm/repl-worker.mjs .rlm-test-build/rlm/ && node --test .rlm-test-build/rlm/rlm.test.js; status=$?; rm -rf .rlm-test-build; exit $status",
     "test:expert-discipline": "rm -rf .expert-discipline-test-build && tsc --noEmit false --outDir .expert-discipline-test-build --declaration false && node --test .expert-discipline-test-build/expert-discipline/expert-discipline.test.js && node --test scripts/expert-discipline.test.mjs; status=$?; rm -rf .expert-discipline-test-build; exit $status",
     "test:expert-discipline:package": "node scripts/test_expert_package.mjs",
     "test:mandatory-skills": "rm -rf .mandatory-skills-test-build && tsc --noEmit false --outDir .mandatory-skills-test-build --declaration false && node --test .mandatory-skills-test-build/mandatory-skills/mandatory-skills.test.js; status=$?; rm -rf .mandatory-skills-test-build; exit $status",
     "test:anti-slop": "rm -rf .anti-slop-test-build && tsc --noEmit false --outDir .anti-slop-test-build --declaration false && node --test .anti-slop-test-build/anti-slop/anti-slop.test.js; status=$?; rm -rf .anti-slop-test-build; if [ $status -ne 0 ]; then exit $status; fi; Rscript scripts/test_anti_slop.R",
+    "test:ste-check": "rm -rf .ste-check-test-build && tsc --noEmit false --outDir .ste-check-test-build --declaration false && node --test .ste-check-test-build/ste-check/ste-check.test.js; status=$?; rm -rf .ste-check-test-build; exit $status",
     "test:s7-opportunities": "Rscript scripts/test_s7_opportunities.R",
     "test:codex-web-search": "rm -rf .codex-web-search-test-build && tsc --noEmit false --outDir .codex-web-search-test-build --declaration false && node --test .codex-web-search-test-build/codex-web-search/codex-web-search.test.js; status=$?; rm -rf .codex-web-search-test-build; exit $status",
     "test:biomedical-evidence": "rm -rf .biomedical-evidence-test-build && tsc --noEmit false --outDir .biomedical-evidence-test-build --declaration false && node --test .biomedical-evidence-test-build/biomedical-evidence/biomedical-evidence.test.js; status=$?; rm -rf .biomedical-evidence-test-build; exit $status",
@@ -71,9 +72,9 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-ai": ">=1.0.0",
+    "@earendil-works/pi-coding-agent": ">=1.0.0",
+    "@earendil-works/pi-tui": ">=1.0.0",
     "typebox": "*"
   },
   "peerDependenciesMeta": {
@@ -98,9 +99,9 @@
     "@plannotator/pi-extension"
   ],
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.84.1",
-    "@earendil-works/pi-coding-agent": "^0.84.1",
-    "@earendil-works/pi-tui": "^0.84.2",
+    "@earendil-works/pi-ai": "^1.0.1",
+    "@earendil-works/pi-coding-agent": "^1.0.1",
+    "@earendil-works/pi-tui": "^1.0.1",
     "@types/node": "^24.0.0",
     "playwright-core": "1.63.0",
     "typebox": "^1.1.38",

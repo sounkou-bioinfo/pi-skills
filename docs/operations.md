@@ -147,15 +147,17 @@ The skill owns the workflow: bounded observe–explain–probe–revise loops,
 event-driven checkpoints rather than per-commit ceremony, and local-only review
 and issue drafts unless publication is requested.
 
-The [expert-discipline hook](../extensions/expert-discipline/index.ts) appends
-fixed, idempotent decision-review instructions and an activation nudge to the
-system prompt. The nudge uses the available skill list and its file location, so
+The [expert-discipline hook](../extensions/expert-discipline/index.ts) supplies
+fixed decision-review instructions and an activation nudge as two named
+system-prompt sections. The nudge uses the available skill list and its file location, so
 Pi reads the skill proactively at relevant decision points in any project; keep
-both the hook and skill enabled. The full skill loads on demand. The appended
-text preserves the incoming prompt's bytes and makes no extra model or
-cache-warming requests; stable text permits cache reuse but does not guarantee
-it. The hook is a behavioral instruction, not a scheduler, tool gate, or proof of
-model adherence or human understanding. After updating the package, finish live
+both the hook and skill enabled. The full skill loads on demand. Decision guidance
+prefers short observe–act–inspect–revise cycles and distinct, evidence-producing
+delegations over unsolicited best-of-N answer sampling. The hook makes no extra
+model or cache-warming requests; stable text permits cache reuse but does not
+guarantee it. The hook is
+a behavioral instruction, not a scheduler, tool gate, or proof of model adherence
+or human understanding. After updating the package, finish live
 tasks and run `/reload` or start a new session.
 
 ## Local review
@@ -361,7 +363,29 @@ when the source session continues growing.
   and truncation. This is structural review, not semantic equivalence or a proof
   that a copied tree represents the repository. See the
   [rule policy](../skills/r-c-anti-slop/SKILL.md).
+- `ste_check` / `/ste-check [--mode procedural|descriptive|mixed] path` checks a
+  Markdown or text file (the tool also accepts draft text) against the
+  structural rules of the
+  [Simplified Technical English skill](../skills/simplified-technical-english/SKILL.md):
+  sentence and paragraph length, verb forms, contractions, semicolons, helping
+  verbs, and words outside the approved list and the skill's
+  [bioinformatics technical names and verbs](../skills/simplified-technical-english/references/bioinformatics-terms.md),
+  which is the place to add project terms. It runs in-process with no
+  external runtime. The skill and word list come from
+  [0xpili/simplified-technical-english](https://github.com/0xpili/simplified-technical-english)
+  (MIT; the ASD-STE100 dictionary belongs to ASD; the bioinformatics rules,
+  terms, and examples are this package's additions, see the
+  [notice](../skills/simplified-technical-english/NOTICE.md)). A clean report is
+  not ASD-STE100 compliance.
 - `mandatory-skills` loads `no-ghosts` and `native-tool-discipline` into every
   system prompt. They govern final-artifact wording and native tool selection.
+- Prompt policy from this package (memory, mandatory skills, expert discipline,
+  local review) is set as named sections on `before_agent_start`
+  (`permanent_memory`, `mandatory_skills`, `expert_decision_discipline`,
+  `architecture_refinement`, `local_review_policy`). Pi 1.0 keeps such a prompt
+  structured in the transcript and sends a later change as a section update. A
+  hook that returns a whole `systemPrompt` makes the prompt one opaque block for
+  that run, so an extension loaded beside this package should set sections too.
+  The package requires Pi 1.0 or later.
 - `vscode-path-links` disables Pi OSC 8 links in VS Code terminals so native path
   detection handles Remote-SSH/WSL clicks. Other terminals are unchanged.

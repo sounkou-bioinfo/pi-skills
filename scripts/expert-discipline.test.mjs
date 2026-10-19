@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,7 +11,9 @@ const repo = fileURLToPath(new URL("..", import.meta.url));
 const source = process.env.PI_EXPERT_SOURCE ?? repo;
 const host = process.env.PI_EXPERT_HOST_DIR ?? path.join(repo, "node_modules/@earendil-works/pi-coding-agent");
 const sdk = await import(pathToFileURL(path.join(host, "dist/index.js")).href);
-const { createAssistantMessageEventStream, InMemoryCredentialStore } = await import(pathToFileURL(path.join(host, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+// The host's pi-ai is nested under it or hoisted beside it.
+const piAi = [path.join(host, "node_modules/@earendil-works/pi-ai"), path.join(host, "../pi-ai")].find((directory) => existsSync(directory));
+const { createAssistantMessageEventStream, getCurrentSystemPrompt, getInitialSystemMessage, InMemoryCredentialStore } = await import(pathToFileURL(path.join(piAi, "dist/index.js")).href);
 
 for (const withSkill of [true, false]) {
   test(`source-loaded nudge reaches another project's provider with skill discovery ${withSkill ? "enabled" : "disabled"}`, { timeout: 30000 }, async (t) => {
@@ -38,7 +41,11 @@ for (const withSkill of [true, false]) {
         extensionFactories: [(pi) => pi.registerProvider("architecture-test", {
           api: model.api, baseUrl: model.baseUrl, apiKey: "offline-fixture", models: [model],
           streamSimple(model, context) {
-            requests.push({ systemPrompt: context.systemPrompt, messages: structuredClone(context.messages) });
+            requests.push({
+              systemPrompt: getCurrentSystemPrompt(context.messages),
+              sections: Object.keys(getInitialSystemMessage(context.messages)?.sections ?? {}),
+              messages: structuredClone(context.messages).filter((message) => message.role !== "system"),
+            });
             const message = { role: "assistant", api: model.api, provider: model.provider, model: model.id,
               content: [{ type: "text", text: "Fixture response." }], timestamp: Date.now(), stopReason: "stop",
               usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
@@ -69,16 +76,20 @@ for (const withSkill of [true, false]) {
       assert.equal(requests[1].systemPrompt, requests[0].systemPrompt, "stable context retains identical provider-visible system-prompt bytes across turns");
       for (const request of requests) {
         assert(request.systemPrompt.startsWith("Fixture base prompt."));
-        for (const marker of ["<!-- pi-expert-decision-discipline:v1 -->", "<!-- pi-architecture-refinement-nudge:v1 -->"]) {
-          assert.equal(request.systemPrompt.split(marker).length - 1, 1);
+        for (const section of ["expert_decision_discipline", "architecture_refinement"]) {
+          assert(request.sections.includes(section), "the prompt stays structured, with each policy as a named section");
+          assert.equal(request.systemPrompt.split(`<${section}>`).length - 1, 1);
         }
         assert.match(request.systemPrompt, /When architecture-refinement is available in the skill list/);
         assert.match(request.systemPrompt, /Do not wait for the user to name the skill/);
+        assert.match(request.systemPrompt, /Do not run independent models on one unchanged question merely to rank outputs/);
+        assert.match(request.systemPrompt, /revisit with new evidence, or honor user-requested comparisons/);
         assert.equal(request.systemPrompt.includes(`<location>${skillPath}</location>`), withSkill);
         assert(!request.systemPrompt.includes("## Explore, challenge, and consolidate"), "the full workflow is loaded on demand");
       }
       assert.deepEqual(requests[0].messages.map((message) => message.role), ["user"]);
-      assert(session.messages.every((message) => ["user", "assistant"].includes(message.role)), "the nudge adds no conversation messages or tool calls");
+      assert.deepEqual(session.messages.map((message) => message.role), ["system", "user", "assistant", "user", "assistant"],
+        "one leading prompt serves both turns; the nudge adds no prompt update, conversation message, or tool call");
       if (withSkill) {
         await session.prompt("/skill:architecture-refinement Examine the next bounded experiment.");
         assert.equal(requests.length, 3);

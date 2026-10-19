@@ -10,7 +10,9 @@ export const repo = fileURLToPath(new URL("..", import.meta.url));
 const helperBin = process.env.PI_PLANNOTATOR_BIN_DIR ?? path.join(homedir(), ".pi/agent/bin");
 const host = process.env.PI_PLANNOTATOR_HOST_DIR ?? path.join(repo, "node_modules/@earendil-works/pi-coding-agent");
 export const sdk = await import(pathToFileURL(path.join(host, "dist/index.js")).href);
-const { createAssistantMessageEventStream, InMemoryCredentialStore } = await import(pathToFileURL(path.join(host, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+// The host's pi-ai is nested under it or hoisted beside it.
+const piAi = [path.join(host, "node_modules/@earendil-works/pi-ai"), path.join(host, "../pi-ai")].find((directory) => existsSync(directory));
+const { createAssistantMessageEventStream, getCurrentSystemPrompt, getInitialSystemMessage, InMemoryCredentialStore } = await import(pathToFileURL(path.join(piAi, "dist/index.js")).href);
 
 export async function until(predicate, label, timeout = 15000) {
   const deadline = Date.now() + timeout;
@@ -60,7 +62,11 @@ export async function openHarness(root, frames = [], source = process.env.PI_PLA
       api: "local-review-test", baseUrl: "http://127.0.0.1:1", apiKey: "offline-fixture",
       models: [model],
       streamSimple(model, context) {
-        requests.push({ systemPrompt: context.systemPrompt, messages: structuredClone(context.messages) });
+        requests.push({
+          systemPrompt: getCurrentSystemPrompt(context.messages),
+          sections: Object.keys(getInitialSystemMessage(context.messages)?.sections ?? {}),
+          messages: structuredClone(context.messages),
+        });
         const content = frames.shift() ?? [{ type: "text", text: "Ready for the user's next instruction." }];
         const toolUse = content.some((part) => part.type === "toolCall");
         const message = { role: "assistant", api: model.api, provider: model.provider, model: model.id,

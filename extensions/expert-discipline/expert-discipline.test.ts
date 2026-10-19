@@ -1,33 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import extension, {
-  appendExpertDiscipline, EXPERT_DISCIPLINE_BLOCK, EXPERT_DISCIPLINE_MARKER,
-  ARCHITECTURE_REFINEMENT_BLOCK, ARCHITECTURE_REFINEMENT_MARKER,
-} from "./index.js";
+import extension, { ARCHITECTURE_REFINEMENT_BLOCK, EXPERT_DISCIPLINE_BLOCK, PROMPT_SECTIONS } from "./index.js";
 
-test("discipline appends bounded byte-stable blocks and preserves the base prompt", () => {
-  const base = "Base prompt\r\nwith exact content.\nλ 🧬";
-  const result = appendExpertDiscipline(base);
-  assert.equal(result, `${base}\n\n${EXPERT_DISCIPLINE_BLOCK}\n\n${ARCHITECTURE_REFINEMENT_BLOCK}`);
-  assert.equal(appendExpertDiscipline(result), result);
-  for (const [marker, block] of [
-    [EXPERT_DISCIPLINE_MARKER, EXPERT_DISCIPLINE_BLOCK],
-    [ARCHITECTURE_REFINEMENT_MARKER, ARCHITECTURE_REFINEMENT_BLOCK],
-  ]) {
-    assert.equal(result.split(marker).length - 1, 1);
+test("each policy is a bounded, separately named prompt section", () => {
+  assert.deepEqual(PROMPT_SECTIONS, {
+    expert_decision_discipline: EXPERT_DISCIPLINE_BLOCK,
+    architecture_refinement: ARCHITECTURE_REFINEMENT_BLOCK,
+  });
+  for (const [name, block] of Object.entries(PROMPT_SECTIONS)) {
+    assert.match(name, /^[a-z][a-z0-9_-]*$/);
     assert(Buffer.byteLength(block, "utf8") <= 1_024);
+    assert.equal(block, block.trim());
   }
 });
 
-test("each policy block is appended only when absent from the chained prompt", () => {
-  for (const [present, missing] of [
-    [EXPERT_DISCIPLINE_BLOCK, ARCHITECTURE_REFINEMENT_BLOCK],
-    [ARCHITECTURE_REFINEMENT_BLOCK, EXPERT_DISCIPLINE_BLOCK],
-  ]) {
-    const base = `Base\n\n${present}`;
-    assert.equal(appendExpertDiscipline(base), `${base}\n\n${missing}`);
-  }
+test("expert discipline favors evidence-producing work over duplicate answer sampling", () => {
+  assert.match(EXPERT_DISCIPLINE_BLOCK, /observe-act-inspect-revise cycles/);
+  assert.match(EXPERT_DISCIPLINE_BLOCK, /Do not run independent models on one unchanged question merely to rank outputs/);
+  assert.match(EXPERT_DISCIPLINE_BLOCK, /revisit with new evidence/);
+  assert.match(EXPERT_DISCIPLINE_BLOCK, /user-requested comparisons/);
+  assert.match(EXPERT_DISCIPLINE_BLOCK, /distinct evidence-producing subproblems/);
 });
 
 test("the nudge requests proactive discovery-based activation with scoped authority", () => {
@@ -40,8 +33,9 @@ test("the nudge requests proactive discovery-based activation with scoped author
   assert.match(ARCHITECTURE_REFINEMENT_BLOCK, /routine mechanical edits/);
 });
 
-test("extension changes only the chained system prompt", async () => {
-  let handler: ((event: { systemPrompt: string }) => Promise<{ systemPrompt: string }>) | undefined;
+test("extension sets only its own prompt sections and never replaces the whole prompt", async () => {
+  type Event = { systemPromptOptions: { sections: Record<string, string> } };
+  let handler: ((event: Event) => unknown) | undefined;
   const pi = {
     on(name: string, callback: typeof handler) {
       assert.equal(name, "before_agent_start");
@@ -51,8 +45,10 @@ test("extension changes only the chained system prompt", async () => {
 
   extension(pi);
   assert(handler);
-  const result = await handler({ systemPrompt: "Base" });
-  const nextTurn = await handler({ systemPrompt: "Base" });
-  assert.equal(result.systemPrompt, `Base\n\n${EXPERT_DISCIPLINE_BLOCK}\n\n${ARCHITECTURE_REFINEMENT_BLOCK}`);
-  assert.deepEqual(nextTurn, result);
+  const event: Event = { systemPromptOptions: { sections: { other_extension: "Other policy." } } };
+  assert.equal(await handler(event), undefined);
+  assert.deepEqual(event.systemPromptOptions.sections, { other_extension: "Other policy.", ...PROMPT_SECTIONS });
+  const firstTurn = structuredClone(event);
+  assert.equal(await handler(event), undefined);
+  assert.deepEqual(event, firstTurn);
 });

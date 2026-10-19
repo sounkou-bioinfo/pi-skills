@@ -224,9 +224,12 @@ test("memory policy is stable and one transient projection is reused through a t
       await tool.execute('seed', { op: 'note', graph: 'global', text: 'DuckHTS uses public reproducible artifacts.' }, undefined, undefined, ctx);
       const historicalStatus = await tool.execute('old-status', { op: 'status', graph: 'global', as_of: 0 }, undefined, undefined, ctx);
       if (historicalStatus.details.status.transactionId !== 0 || historicalStatus.details.status.notes !== 0) throw new Error('status ignored as_of');
-      const before = await handlers.before_agent_start({ systemPrompt: 'base' }, ctx);
-      if (!before.systemPrompt.includes('PERMANENT MEMORY POLICY')) throw new Error('missing stable policy');
-      if (before.systemPrompt.includes('DuckHTS uses public')) throw new Error('dynamic memory leaked into system prompt');
+      const promptEvent = { systemPromptOptions: { sections: { other_extension: 'Other policy.' } } };
+      if (await handlers.before_agent_start(promptEvent, ctx) !== undefined) throw new Error('the whole system prompt was replaced');
+      const sections = promptEvent.systemPromptOptions.sections;
+      if (Object.keys(sections).join() !== 'other_extension,permanent_memory') throw new Error('policy is not one named prompt section');
+      if (!sections.permanent_memory.startsWith('PERMANENT MEMORY POLICY\\n')) throw new Error('missing stable policy');
+      if (sections.permanent_memory.includes('DuckHTS uses public')) throw new Error('dynamic memory leaked into system prompt');
 
       const messages = [{ role: 'user', content: [{ type: 'text', text: 'inspect DuckHTS artifacts' }], timestamp: 10 }];
       const first = await handlers.context({ messages }, ctx);
@@ -301,7 +304,7 @@ test("extension lifecycle serializes open, use, and shutdown", async () => {
       };
       await Promise.all([
         handlers.session_start({}, ctx),
-        handlers.before_agent_start({ systemPrompt: 'base' }, ctx),
+        handlers.before_agent_start({ systemPromptOptions: { sections: {} } }, ctx),
         tool.execute('call', { op: 'note', graph: 'global', text: 'lifecycle note' }, undefined, undefined, ctx),
         handlers.session_shutdown(),
       ]);

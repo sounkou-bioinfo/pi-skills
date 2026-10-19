@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Require Pi 1.0 (development types 1.0.1). Supply the memory, mandatory-skills, expert-discipline, and local-review policies as named `before_agent_start` prompt sections, so Pi keeps the system prompt structured and sends later changes as section updates; none of the hooks replaces the whole prompt. SDK harnesses read the provider-visible prompt from the transcript's system message and locate the host's `pi-ai` whether nested or hoisted. Add a real-SDK memory test for prompt stability and projection placement.
+
+- Add the `simplified-technical-english` skill (ASD-STE100 writing rules, approved word list, substitutions, and examples from 0xpili/simplified-technical-english, MIT with ASD dictionary notice) and an in-process `ste_check` tool and `/ste-check` command that port its structural checker to TypeScript. Adapt the skill to bioinformatics with technical names and verbs, specific-value rules, data-oriented WARNING/CAUTION levels, and before/after examples; the checker accepts the bioinformatics term list.
 - Consolidate the reuse, bindings, porting, SQL-native, single-pass, and cache/index skills into one sectioned `bioinformatics-rewrites` skill, and fold R-package bindings into `duckdb-c-extension`. Overlapping checklists merge into one reference per topic.
 - Retain a contiguous newest suffix of inspection text in `context-budget` so earlier omission notices stay byte-stable as append-only history grows. Document cache and subscription-measurement limits and viewer-only local diff review with `/plannotator-review --git`.
 - Define R-native coding idioms, language-object construction, dispatch, and contract-directed validation in the `we-use-r-damnit` skill.
