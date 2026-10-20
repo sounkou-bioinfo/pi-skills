@@ -282,7 +282,11 @@ Full stored/UI results and metadata remain intact. Configure
 `PI_CONTEXT_TOOL_RESULTS_TOTAL_BYTES` (16384–524288).
 
 Crossing the retained-text ceiling re-trims a whole older block to retain at
-most half-budget, or the newest single bounded result if larger. Omission
+most half-budget, or the newest single bounded result if larger. When the
+provider cache is already cold, because the newest assistant reply is more than
+one hour old or the session was just compacted, the same re-trim runs as soon as
+retained text exceeds half-budget: that request rewrites the prompt anyway, so
+the headroom costs nothing and postpones the next warm re-trim. Omission
 decisions are persisted by toolCallId in session custom entries and restored
 from the active branch on reload/tree navigation. Between these deliberate
 re-trims, previously sent inspection results remain byte-stable. Older small
@@ -310,7 +314,10 @@ establish a hard quota cap.
 The package auto-discovers `extensions/cache-telemetry/index.ts`. Reload Pi after
 installing the package update, then use `/cache` or `/cache 10` (1–100) for the
 active branch's turns, miss rate, costs and latest misses. The command is local
-and does not send a model request.
+and does not send a model request. A miss names the events observed before it,
+including an idle gap past the one-hour cache lifetime (`idle 81 min, past the
+60 min cache lifetime`) and context-budget re-trims (`context-budget trimmed 36
+tool results`).
 
 In the interactive UI the footer shows the latest turn's reuse and cost, the
 session cost and the cost of misses so far, for example
