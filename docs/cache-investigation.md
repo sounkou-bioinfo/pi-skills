@@ -1,7 +1,7 @@
 # Prompt-cache investigation
 
-Branch: `fix/cache-stable-context-budget`. Implementation commit:
-`c1363941a099d5891bebc0980b8054a7bda5052f`. Nothing pushed.
+Implementation commit:
+`c1363941a099d5891bebc0980b8054a7bda5052f`.
 
 ## Evidence and attribution
 
@@ -79,7 +79,7 @@ Changed files, all under `/home/biouser/.pi/agent/git/github.com/sounkou-bioinfo
 - `/home/biouser/.pi/agent/git/github.com/sounkou-bioinfo/pi-skills/TEST_PLAN.md`
 - `/home/biouser/.pi/agent/git/github.com/sounkou-bioinfo/pi-skills/docs/operations.md`
 - `/home/biouser/.pi/agent/git/github.com/sounkou-bioinfo/pi-skills/docs/cache-hook-audit.md`
-- `/home/biouser/.pi/agent/git/github.com/sounkou-bioinfo/pi-skills/CACHE_INVESTIGATION.md`
+- `/home/biouser/.pi/agent/git/github.com/sounkou-bioinfo/pi-skills/docs/cache-investigation.md`
 
 Typecheck, full `npm test`, package/link checks, and focused tests pass:
 13 budget tests; six telemetry/SDK tests including provider-visible prefixes,
