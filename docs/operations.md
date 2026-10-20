@@ -279,13 +279,14 @@ Full stored/UI results and metadata remain intact. Configure
 `PI_CONTEXT_TOOL_RESULT_BYTES` (4096–51200) and
 `PI_CONTEXT_TOOL_RESULTS_TOTAL_BYTES` (16384–524288).
 
-The model receives a contiguous newest suffix of eligible inspection text.
-Once a result cannot fit, it and all earlier eligible results receive omission
-notices. The remaining allowance may be underfilled: older small results are
-not used to fill gaps. With fixed limits and append-only history, earlier
-omissions stay identical rather than reappearing near the start of the prompt.
-Fresh evidence remains eligible on every call; this is not a lifetime quota.
-Omission-notice overhead is separate from the retained-text allowance.
+Crossing the retained-text ceiling re-trims a whole older block to retain at
+most half-budget, or the newest single bounded result if larger. Omission
+decisions are persisted by toolCallId in session custom entries and restored
+from the active branch on reload/tree navigation. Between these deliberate
+re-trims, previously sent inspection results remain byte-stable. Older small
+results do not fill suffix gaps. Omission-notice overhead is separate from the
+retained-text allowance; ordinary conversation compaction still bounds the rest
+of the history. Re-running a tool obtains fresh evidence under a new toolCallId.
 
 Eviction still changes the prompt near the recent-evidence boundary. Compaction,
 branch changes, model/tool/prompt changes, and provider cache expiry can also
@@ -301,6 +302,56 @@ experiment needs separate authorization and must account for all probes,
 failures, resumed work, sessions that never resume, concurrent usage, and
 allowance resets. A client timeout or a request for one output token does not
 establish a hard quota cap.
+
+### Cache telemetry
+
+The package auto-discovers `extensions/cache-telemetry/index.ts`. Reload Pi after
+installing the package update, then use `/cache` or `/cache 10` (1–100) for the
+active branch's turns, miss rate, costs and latest misses. The command is local
+and does not send a model request.
+
+In the interactive UI the footer shows the latest turn's reuse and cost, the
+session cost and the cost of misses so far, for example
+`cache ✓ 99% · turn $0.15 · session $812.40 · 221 misses $716.29`. A miss turns
+the line red and raises a warning with the tokens read and rewritten, the turn's
+cost, its estimated extra cost over a hit (cache-write minus cache-read price
+for the rewritten tokens), and the events observed before it.
+
+Assistant messages already store usage;
+telemetry reuses that data and appends `cache-telemetry-v1` custom entries for
+request diagnostics. These entries do not enter model context. They contain
+usage/cost, classifications, event names, tool-result counts, and SHA-256 digests
+of the observed system prompt and active tool-name order, not prompt text.
+
+A hit has at least 50% cached input (`input + cacheRead + cacheWrite`, excluding
+output). Low reuse after a comparable provider/model turn is a miss; a first or
+model-switch low-reuse turn is cold. Zero-input turns are unknown. A sharp-drop
+flag requires more than a 50% drop from at least 4,096 cached tokens while input
+context grows on the same provider/model. Miss rate excludes cold/unknown turns;
+costs include separate cold/unknown buckets. These are reuse heuristics, not
+provider cache verdicts. Compaction, model changes, observed prompt/tool-order
+changes and tool-result counts are diagnostics, not proven causes. Prompt/tool
+hashes are extension-context observations, not final wire-payload fingerprints;
+they cannot detect an arbitrary later provider-payload mutation or tool-schema
+change with unchanged names. Older turns retain usage but may lack diagnostics.
+
+For offline session replay on Node 24+, run:
+
+```sh
+node /home/biouser/.pi/agent/git/github.com/sounkou-bioinfo/pi-skills/scripts/analyze_cache_misses.mjs \
+  /home/biouser/.pi/agent/sessions/--home-biouser-DevOps-ulcwgs--/2026-09-08T08-57-25-078Z_01a0803c-8556-75b3-a1ca-f7d11e0dc808.jsonl \
+  /home/biouser/.nvm/versions/node/v24.14.1/lib/node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js
+```
+
+Use the core module matching the log's Pi version. Replay takes a byte-bounded
+snapshot, reports its SHA-256, follows parent IDs/compaction context entries,
+and compares the configured legacy/new omission decisions. It neither contacts a
+provider nor writes the session. Its cohort is Claude Code / claude-opus-5-5;
+investigation misses use the supplied `<50% of totalTokens` definition, which
+includes output and differs from the live telemetry input-only denominator.
+An optional final positive integer limits the cohort to that many qualifying
+large-context turns; use `577` to reproduce the investigation's original cohort
+when the source session continues growing.
 
 ## Auditing and terminal behavior
 

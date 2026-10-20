@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const DEFAULT_TOOL_RESULT_BYTES = 12 * 1024;
 const DEFAULT_TOTAL_TOOL_RESULT_BYTES = 64 * 1024;
@@ -6,6 +6,7 @@ const MIN_TOOL_RESULT_BYTES = 4 * 1024;
 const MAX_TOOL_RESULT_BYTES = 50 * 1024;
 const MIN_TOTAL_TOOL_RESULT_BYTES = 16 * 1024;
 const MAX_TOTAL_TOOL_RESULT_BYTES = 512 * 1024;
+const STATE_TYPE = "context-budget-omissions-v1";
 const BOUNDED_TOOLS = new Set(["bash", "read", "grep", "find", "ls"]);
 const OMITTED_MARKER = "\n\n[Context budget: middle omitted. Re-run read with offset/limit or use a narrower bash/search command.]\n\n";
 
@@ -20,9 +21,21 @@ type CandidateToolResult = {
 export default function contextBudgetExtension(pi: ExtensionAPI): void {
   const maxBytes = configuredByteLimit(process.env.PI_CONTEXT_TOOL_RESULT_BYTES);
   const totalBytes = configuredTotalByteLimit(process.env.PI_CONTEXT_TOOL_RESULTS_TOTAL_BYTES);
-  pi.on("context", async (event) => ({
-    messages: boundInspectionResults(event.messages, maxBytes, totalBytes),
-  }));
+  let omitted = new Set<string>();
+  const restore = (_event: unknown, ctx: ExtensionContext) => {
+    omitted = new Set(ctx.sessionManager.getBranch().flatMap((entry) =>
+      entry.type === "custom" && entry.customType === STATE_TYPE && Array.isArray(entry.data)
+        ? entry.data.filter((id: unknown): id is string => typeof id === "string") : []));
+  };
+  pi.on("session_start", restore);
+  pi.on("session_tree", restore);
+  pi.on("context", async (event) => {
+    const before = new Set(omitted);
+    const messages = boundInspectionResults(event.messages, maxBytes, totalBytes, omitted);
+    const added = [...omitted].filter((id) => !before.has(id));
+    if (added.length) pi.appendEntry(STATE_TYPE, added);
+    return { messages };
+  });
 }
 
 export function boundToolResult<T>(message: T, maxBytes = DEFAULT_TOOL_RESULT_BYTES): T {
@@ -43,22 +56,38 @@ export function boundToolResult<T>(message: T, maxBytes = DEFAULT_TOOL_RESULT_BY
   } as T;
 }
 
-// Retain a contiguous newest suffix of inspection text. Earlier omissions stay
-// stable as results arrive, while fresh evidence remains eligible on every call.
+// Freeze omissions by toolCallId. Crossing the hard ceiling deliberately re-trims
+// to half-budget (or the newest result's size), amortizing prefix invalidation.
+// Reuse the omission set across requests and restore it from the active branch.
 export function boundInspectionResults<T>(
   messages: T[],
   maxBytes = DEFAULT_TOOL_RESULT_BYTES,
   totalBytes = DEFAULT_TOTAL_TOOL_RESULT_BYTES,
+  omitted = new Set<string>(),
 ): T[] {
   const bounded = messages.map((message) => boundToolResult(message, Math.min(maxBytes, totalBytes)));
-  let remaining = totalBytes;
-  for (let index = bounded.length - 1; index >= 0; index--) {
+  const inspections: Array<{ index: number; id: string; toolName: string; bytes: number }> = [];
+  for (let index = 0; index < bounded.length; index++) {
     const message = bounded[index] as CandidateToolResult;
     if (message.role !== "toolResult" || !message.toolName || !BOUNDED_TOOLS.has(message.toolName)) continue;
     if (!message.content || message.content.some((part) => part.type !== "text" || typeof part.text !== "string")) continue;
-    const bytes = Buffer.byteLength(message.content.map((part) => part.text ?? "").join("\n"), "utf8");
-    remaining -= bytes;
-    if (remaining < 0) bounded[index] = stubResult(bounded[index] as object, message.toolName, bytes) as T;
+    inspections.push({ index, id: message.toolCallId ?? `index:${index}`, toolName: message.toolName,
+      bytes: Buffer.byteLength(message.content.map((part) => part.text ?? "").join("\n"), "utf8") });
+  }
+  const eligible = inspections.filter(({ id }) => !omitted.has(id));
+  if (eligible.reduce((sum, result) => sum + result.bytes, 0) > totalBytes) {
+    const target = Math.max(Math.floor(totalBytes / 2), eligible.at(-1)!.bytes);
+    let retained = 0;
+    let evict = false;
+    for (const result of eligible.slice().reverse()) {
+      if (evict || retained + result.bytes > target) {
+        evict = true;
+        omitted.add(result.id);
+      } else retained += result.bytes;
+    }
+  }
+  for (const { index, id, toolName, bytes } of inspections) {
+    if (omitted.has(id)) bounded[index] = stubResult(bounded[index] as object, toolName, bytes) as T;
   }
   return bounded;
 }
