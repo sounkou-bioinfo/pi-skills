@@ -11,6 +11,36 @@ export type CacheTurn = {
 };
 type MeasuredTurn = Omit<CacheTurn, "classification" | "sharpDrop">;
 
+// Estimated extra cost of a miss: tokens written to cache that a hit would have
+// read instead, priced from the turn's own per-token write and read costs.
+export function missPenalty(message: any): number {
+  const usage = message?.usage;
+  if (!usage?.cacheWrite || !usage.cost?.cacheWrite) return 0;
+  const writeRate = usage.cost.cacheWrite / usage.cacheWrite;
+  const readRate = usage.cacheRead && usage.cost.cacheRead ? usage.cost.cacheRead / usage.cacheRead : writeRate / 12.5;
+  return Math.max(0, usage.cacheWrite * (writeRate - readRate));
+}
+
+const tokens = (value: number) => value >= 1000 ? `${(value / 1000).toFixed(value >= 100000 ? 0 : 1)}k` : String(value);
+
+export function formatCacheStatus(turns: CacheTurn[]): string {
+  const last = turns.at(-1);
+  if (!last) return "cache –";
+  const context = last.input + last.cacheRead + last.cacheWrite;
+  const reuse = context ? Math.round(100 * last.cacheRead / context) : 0;
+  const misses = turns.filter((turn) => turn.classification === "miss");
+  const total = turns.reduce((sum, turn) => sum + turn.cost, 0);
+  const missCost = misses.reduce((sum, turn) => sum + turn.cost, 0);
+  const mark = last.classification === "miss" ? "✗ MISS" : last.classification === "hit" ? "✓" : last.classification;
+  return `cache ${mark} ${reuse}% · turn $${last.cost.toFixed(2)} · session $${total.toFixed(2)} · ${misses.length} misses $${missCost.toFixed(2)}`;
+}
+
+export function formatMissAlert(turn: CacheTurn, penalty: number): string {
+  return `Cache miss: read ${tokens(turn.cacheRead)}, rewrote ${tokens(turn.cacheWrite)} of ${tokens(turn.input + turn.cacheRead + turn.cacheWrite)} tokens. ` +
+    `Turn cost $${turn.cost.toFixed(2)}${penalty > 0 ? ` (about $${penalty.toFixed(2)} more than a hit)` : ""}. ` +
+    `Preceding: ${turn.events.join(", ") || "none observed"}.`;
+}
+
 export function classifyTurn(turn: MeasuredTurn, previous?: CacheTurn): CacheTurn {
   const context = turn.input + turn.cacheRead + turn.cacheWrite;
   const sameModel = previous?.provider === turn.provider && previous.model === turn.model;
@@ -74,10 +104,17 @@ export default function cacheTelemetry(pi: ExtensionAPI): void {
   let turns: CacheTurn[] = [];
   let events: string[] = [];
   let request: Pick<CacheTurn, "toolResults" | "promptHash" | "toolsHash"> = {};
+  const showStatus = (ctx: ExtensionContext) => {
+    if (!ctx.hasUI) return;
+    const text = formatCacheStatus(turns);
+    const color = turns.at(-1)?.classification === "miss" ? "error" : "dim";
+    ctx.ui.setStatus("cache-telemetry", ctx.ui.theme.fg(color, text));
+  };
   const restore = (_event: unknown, ctx: ExtensionContext) => {
     turns = readTurns(ctx.sessionManager.getBranch());
     events = [];
     request = {};
+    showStatus(ctx);
   };
   pi.on("session_start", restore);
   pi.on("session_tree", (event, ctx) => { restore(event, ctx); events.push("tree navigation"); });
@@ -90,7 +127,7 @@ export default function cacheTelemetry(pi: ExtensionAPI): void {
       promptHash: hash(ctx.getSystemPrompt()), toolsHash: hash(JSON.stringify(pi.getActiveTools())),
     };
   });
-  pi.on("turn_end", (event) => {
+  pi.on("turn_end", (event, ctx) => {
     if (event.message.role !== "assistant") return;
     const previous = turns.at(-1);
     if (previous?.promptHash && request.promptHash !== previous.promptHash) events.push("system prompt changed");
@@ -100,6 +137,8 @@ export default function cacheTelemetry(pi: ExtensionAPI): void {
     pi.appendEntry(ENTRY_TYPE, turn);
     events = [];
     request = {};
+    showStatus(ctx);
+    if (turn.classification === "miss" && ctx.hasUI) ctx.ui.notify(formatMissAlert(turn, missPenalty(event.message)), "warning");
   });
   pi.registerCommand("cache", {
     description: "Show cache reuse, cost, and last N misses (default 5; active branch)",

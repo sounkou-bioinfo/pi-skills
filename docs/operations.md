@@ -308,7 +308,16 @@ establish a hard quota cap.
 The package auto-discovers `extensions/cache-telemetry/index.ts`. Reload Pi after
 installing the package update, then use `/cache` or `/cache 10` (1–100) for the
 active branch's turns, miss rate, costs and latest misses. The command is local
-and does not send a model request. Assistant messages already store usage;
+and does not send a model request.
+
+In the interactive UI the footer shows the latest turn's reuse and cost, the
+session cost and the cost of misses so far, for example
+`cache ✓ 99% · turn $0.15 · session $812.40 · 221 misses $716.29`. A miss turns
+the line red and raises a warning with the tokens read and rewritten, the turn's
+cost, its estimated extra cost over a hit (cache-write minus cache-read price
+for the rewritten tokens), and the events observed before it.
+
+Assistant messages already store usage;
 telemetry reuses that data and appends `cache-telemetry-v1` custom entries for
 request diagnostics. These entries do not enter model context. They contain
 usage/cost, classifications, event names, tool-result counts, and SHA-256 digests

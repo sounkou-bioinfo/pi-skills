@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import cacheTelemetry, { classifyTurn, formatCacheSummary, readTurns } from "./index.js";
+import cacheTelemetry, { classifyTurn, formatCacheStatus, formatCacheSummary, formatMissAlert, missPenalty, readTurns } from "./index.js";
 
 const usage = (overrides = {}) => ({ timestamp: 1000, provider: "claude-code", model: "opus",
   input: 5000, output: 1000, cacheRead: 100000, cacheWrite: 0, totalTokens: 106000, cost: 1,
@@ -75,7 +75,7 @@ test("extension observes without mutating context and persists diagnostics outsi
   assert.deepEqual(messages, source);
   hooks.get("session_compact")();
   hooks.get("model_select")();
-  hooks.get("turn_end")({ message: { role: "assistant", ...usage(), usage: { ...usage(), cost: { total: 1 } } } });
+  hooks.get("turn_end")({ message: { role: "assistant", ...usage(), usage: { ...usage(), cost: { total: 1 } } } }, ctx);
   assert.equal(entries.length, 1);
   assert.equal(entries[0].data.toolResults, 1);
   assert.deepEqual(entries[0].data.events, ["compaction", "model change"]);
@@ -86,4 +86,40 @@ test("extension observes without mutating context and persists diagnostics outsi
   hooks.get("session_start")({}, { ...ctx, sessionManager: { getBranch: () => [] } });
   await command.handler("", ctx);
   assert.match(notifications.at(-1)!, /0 turns/);
+});
+
+test("a miss shows a red status and a warning with its cost", () => {
+  const hooks = new Map<string, any>();
+  const statuses: Array<[string, string]> = [];
+  const warnings: string[] = [];
+  cacheTelemetry({
+    on: (name: string, handler: any) => hooks.set(name, handler),
+    appendEntry: () => undefined,
+    getActiveTools: () => [],
+    registerCommand: () => undefined,
+  } as any);
+  const ctx = { hasUI: true, getSystemPrompt: () => "stable", sessionManager: { getBranch: () => [] },
+    ui: { theme: { fg: (color: string, text: string) => `${color}:${text}` },
+      setStatus: (_key: string, text: string) => statuses.push([_key, text]),
+      notify: (text: string, level: string) => { if (level === "warning") warnings.push(text); } } };
+  const turn = (cacheRead: number, cacheWrite: number, total: number) => ({ message: { role: "assistant", timestamp: Date.now(),
+    provider: "p", model: "m", usage: { input: 2, output: 10, cacheRead, cacheWrite, totalTokens: cacheRead + cacheWrite + 12,
+      cost: { cacheRead: cacheRead * 2e-7, cacheWrite: cacheWrite * 8e-6, total } } } });
+  hooks.get("session_start")({}, ctx);
+  hooks.get("turn_end")(turn(600000, 2000, 0.15), ctx);
+  assert.equal(warnings.length, 0);
+  assert.match(statuses.at(-1)![1], /^dim:cache ✓ 100%/);
+  hooks.get("turn_end")(turn(15000, 600000, 5.1), ctx);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Cache miss: read 15\.0k, rewrote 600k of 615k tokens\. Turn cost \$5\.10 \(about \$4\.68 more than a hit\)/);
+  assert.match(statuses.at(-1)![1], /^error:cache ✗ MISS 2% · turn \$5\.10 · session \$5\.25 · 1 misses \$5\.10$/);
+});
+
+test("miss penalty and status handle missing usage", () => {
+  assert.equal(missPenalty({}), 0);
+  assert.equal(missPenalty({ usage: { cacheWrite: 1000, cacheRead: 0, cost: { cacheWrite: 0.008 } } }), 0.008 - 0.008 / 12.5);
+  assert.equal(formatCacheStatus([]), "cache –");
+  const miss = classifyTurn({ timestamp: 1, provider: "p", model: "m", input: 0, output: 0, cacheRead: 10, cacheWrite: 990,
+    totalTokens: 1000, cost: 1, events: [] });
+  assert.match(formatMissAlert(miss, 0), /Turn cost \$1\.00\. Preceding: none observed\.$/);
 });
