@@ -7,6 +7,8 @@ const MAX_TOOL_RESULT_BYTES = 50 * 1024;
 const MIN_TOTAL_TOOL_RESULT_BYTES = 16 * 1024;
 const MAX_TOTAL_TOOL_RESULT_BYTES = 512 * 1024;
 const STATE_TYPE = "context-budget-omissions-v1";
+// Provider prompt caches used here expire after at most one hour without use.
+export const CACHE_LIFETIME_MS = 60 * 60 * 1000;
 const BOUNDED_TOOLS = new Set(["bash", "read", "grep", "find", "ls"]);
 const OMITTED_MARKER = "\n\n[Context budget: middle omitted. Re-run read with offset/limit or use a narrower bash/search command.]\n\n";
 
@@ -22,6 +24,7 @@ export default function contextBudgetExtension(pi: ExtensionAPI): void {
   const maxBytes = configuredByteLimit(process.env.PI_CONTEXT_TOOL_RESULT_BYTES);
   const totalBytes = configuredTotalByteLimit(process.env.PI_CONTEXT_TOOL_RESULTS_TOTAL_BYTES);
   let omitted = new Set<string>();
+  let compacted = false;
   const restore = (_event: unknown, ctx: ExtensionContext) => {
     omitted = new Set(ctx.sessionManager.getBranch().flatMap((entry) =>
       entry.type === "custom" && entry.customType === STATE_TYPE && Array.isArray(entry.data)
@@ -29,9 +32,12 @@ export default function contextBudgetExtension(pi: ExtensionAPI): void {
   };
   pi.on("session_start", restore);
   pi.on("session_tree", restore);
+  pi.on("session_compact", () => { compacted = true; });
   pi.on("context", async (event) => {
     const before = new Set(omitted);
-    const messages = boundInspectionResults(event.messages, maxBytes, totalBytes, omitted);
+    const cold = compacted || cacheExpired(event.messages, Date.now());
+    compacted = false;
+    const messages = boundInspectionResults(event.messages, maxBytes, totalBytes, omitted, cold);
     const added = [...omitted].filter((id) => !before.has(id));
     if (added.length) pi.appendEntry(STATE_TYPE, added);
     return { messages };
@@ -56,14 +62,30 @@ export function boundToolResult<T>(message: T, maxBytes = DEFAULT_TOOL_RESULT_BY
   } as T;
 }
 
-// Freeze omissions by toolCallId. Crossing the hard ceiling deliberately re-trims
-// to half-budget (or the newest result's size), amortizing prefix invalidation.
+// True when the newest assistant reply is older than the cache lifetime, so the
+// provider will rewrite the whole prompt whatever this request contains.
+export function cacheExpired(messages: readonly unknown[], now: number): boolean {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index] as { role?: string; timestamp?: number };
+    if (message.role === "assistant" && typeof message.timestamp === "number") {
+      return now - message.timestamp > CACHE_LIFETIME_MS;
+    }
+  }
+  return false;
+}
+
+// Freeze omissions by toolCallId, so a sent result keeps its bytes. Crossing the
+// budget re-trims to half of it (or the newest result's size); each such re-trim
+// invalidates the prompt prefix once. When the cache is already cold (idle past
+// its lifetime or just compacted), re-trim to the same target as soon as retained
+// text exceeds it: the prefix is rewritten anyway, so the headroom is free.
 // Reuse the omission set across requests and restore it from the active branch.
 export function boundInspectionResults<T>(
   messages: T[],
   maxBytes = DEFAULT_TOOL_RESULT_BYTES,
   totalBytes = DEFAULT_TOTAL_TOOL_RESULT_BYTES,
   omitted = new Set<string>(),
+  cold = false,
 ): T[] {
   const bounded = messages.map((message) => boundToolResult(message, Math.min(maxBytes, totalBytes)));
   const inspections: Array<{ index: number; id: string; toolName: string; bytes: number }> = [];
@@ -75,8 +97,9 @@ export function boundInspectionResults<T>(
       bytes: Buffer.byteLength(message.content.map((part) => part.text ?? "").join("\n"), "utf8") });
   }
   const eligible = inspections.filter(({ id }) => !omitted.has(id));
-  if (eligible.reduce((sum, result) => sum + result.bytes, 0) > totalBytes) {
-    const target = Math.max(Math.floor(totalBytes / 2), eligible.at(-1)!.bytes);
+  const retainedBytes = eligible.reduce((sum, result) => sum + result.bytes, 0);
+  const target = Math.max(Math.floor(totalBytes / 2), eligible.at(-1)?.bytes ?? 0);
+  if (retainedBytes > (cold ? target : totalBytes)) {
     let retained = 0;
     let evict = false;
     for (const result of eligible.slice().reverse()) {

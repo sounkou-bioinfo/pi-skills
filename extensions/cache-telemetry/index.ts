@@ -3,6 +3,37 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-wor
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 const ENTRY_TYPE = "cache-telemetry-v1";
+const OMISSIONS_TYPE = "context-budget-omissions-v1";
+// Provider prompt caches used here expire after at most one hour without use.
+export const CACHE_LIFETIME_MS = 60 * 60 * 1000;
+
+export function idleEvent(previousTimestamp: number | undefined, requestTimestamp: number): string | undefined {
+  if (previousTimestamp === undefined) return undefined;
+  const idle = requestTimestamp - previousTimestamp;
+  return idle > CACHE_LIFETIME_MS ? `idle ${Math.round(idle / 60000)} min, past the ${CACHE_LIFETIME_MS / 60000} min cache lifetime` : undefined;
+}
+
+function trimEvent(entry: SessionEntry): string | undefined {
+  if (entry.type !== "custom" || entry.customType !== OMISSIONS_TYPE || !Array.isArray(entry.data)) return undefined;
+  return `context-budget trimmed ${entry.data.length} tool results`;
+}
+
+// Context-budget trims recorded on the branch since the assistant reply before `currentId`.
+export function trimEventsBefore(entries: readonly SessionEntry[], currentId?: string): string[] {
+  let end = entries.length;
+  if (currentId) {
+    const index = entries.findIndex((entry) => entry.id === currentId);
+    if (index >= 0) end = index;
+  }
+  const found: string[] = [];
+  for (let index = end - 1; index >= 0; index--) {
+    const entry = entries[index];
+    if (entry.type === "message" && entry.message.role === "assistant") break;
+    const event = trimEvent(entry);
+    if (event) found.unshift(event);
+  }
+  return found;
+}
 export type ProviderPayloadContinuity = {
   field: "input" | "messages"; items: number; previousItems?: number; commonPrefixItems?: number;
   prefixStable?: boolean; firstMismatch?: number; changedFields?: string[];
@@ -123,11 +154,19 @@ export function readTurns(entries: readonly SessionEntry[]): CacheTurn[] {
   }
   const turns: CacheTurn[] = [];
   let events: string[] = [];
+  let previousAssistant: number | undefined;
   for (const entry of entries) {
     if (entry.type === "compaction") events.push("compaction");
     if (entry.type === "model_change") events.push("model change");
     if (entry.type === "branch_summary") events.push("branch summary");
+    const trim = trimEvent(entry);
+    if (trim) events.push(trim);
     const message = entry.type === "message" ? entry.message : undefined;
+    if (message?.role === "user") {
+      const idle = idleEvent(previousAssistant, message.timestamp);
+      if (idle) events.push(idle);
+    }
+    if (message?.role === "assistant") previousAssistant = message.timestamp;
     if (message?.role !== "assistant" || !message.usage) continue;
     const saved = diagnosticsByEntry.get(entry.id) ?? legacyDiagnostics.get(message.timestamp);
     turns.push(classifyTurn({ ...measure(message), ...saved,
@@ -162,7 +201,7 @@ export function formatCacheSummary(turns: CacheTurn[], last = 5): string {
 export default function cacheTelemetry(pi: ExtensionAPI): void {
   let turns: CacheTurn[] = [];
   let events: string[] = [];
-  let request: Pick<CacheTurn, "toolResults" | "promptHash" | "toolsHash" | "providerPayload"> = {};
+  let request: Pick<CacheTurn, "toolResults" | "promptHash" | "toolsHash" | "providerPayload"> & { at?: number } = {};
   let previousPayload: ProviderPayloadFingerprint | undefined;
   const showStatus = (ctx: ExtensionContext) => {
     if (!ctx.hasUI) return;
@@ -183,6 +222,7 @@ export default function cacheTelemetry(pi: ExtensionAPI): void {
   pi.on("model_select", () => { events.push("model change"); previousPayload = undefined; });
   pi.on("context", (event, ctx) => {
     request = {
+      at: request.at ?? Date.now(),
       toolResults: event.messages.filter((message) => message.role === "toolResult").length,
       promptHash: hash(ctx.getSystemPrompt()), toolsHash: hash(JSON.stringify(pi.getActiveTools())),
     };
@@ -197,7 +237,11 @@ export default function cacheTelemetry(pi: ExtensionAPI): void {
     const previous = turns.at(-1);
     if (previous?.promptHash && request.promptHash !== previous.promptHash) events.push("system prompt changed");
     if (previous?.toolsHash && request.toolsHash !== previous.toolsHash) events.push("active tool order/set changed");
-    const turn = classifyTurn({ ...measure(event.message), ...request, messageEntryId: event.messageEntryId,
+    const idle = idleEvent(previous?.timestamp, request.at ?? event.message.timestamp);
+    if (idle) events.push(idle);
+    events.push(...trimEventsBefore(ctx.sessionManager.getBranch(), event.messageEntryId));
+    const { at: _at, ...diagnostics } = request;
+    const turn = classifyTurn({ ...measure(event.message), ...diagnostics, messageEntryId: event.messageEntryId,
       events: [...new Set(events)] }, previous);
     turns.push(turn);
     pi.appendEntry(ENTRY_TYPE, turn);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import cacheTelemetry, { classifyTurn, formatCacheStatus, formatCacheSummary, formatMissAlert, formatPayloadContinuity,
-  inspectProviderPayload, missPenalty, readTurns } from "./index.js";
+  inspectProviderPayload, missPenalty, readTurns, idleEvent, trimEventsBefore, CACHE_LIFETIME_MS } from "./index.js";
 
 const usage = (overrides = {}) => ({ timestamp: 1000, provider: "claude-code", model: "opus",
   input: 5000, output: 1000, cacheRead: 100000, cacheWrite: 0, totalTokens: 106000, cost: 1,
@@ -171,4 +171,47 @@ test("miss penalty and status handle missing usage", () => {
   const miss = classifyTurn({ timestamp: 1, provider: "p", model: "m", input: 0, output: 0, cacheRead: 10, cacheWrite: 990,
     totalTokens: 1000, cost: 1, events: [] });
   assert.match(formatMissAlert(miss, 0), /Turn cost \$1\.00\. Preceding: none observed\. Pre-transport logical request not observed\.$/);
+});
+
+test("misses name an idle gap past the cache lifetime and context-budget trims", () => {
+  assert.equal(idleEvent(undefined, 0), undefined);
+  assert.equal(idleEvent(0, CACHE_LIFETIME_MS), undefined);
+  assert.equal(idleEvent(0, 81 * 60_000), "idle 81 min, past the 60 min cache lifetime");
+  const assistant = (id: string, timestamp: number, cacheRead: number) => ({ type: "message", id,
+    message: { role: "assistant", timestamp, provider: "p", model: "m",
+      usage: { input: 0, output: 1, cacheRead, cacheWrite: 1000 - cacheRead, totalTokens: 1001, cost: { total: 1 } } } });
+  const branch: any[] = [
+    assistant("a1", 0, 900),
+    { type: "message", id: "u1", message: { role: "user", timestamp: 81 * 60_000 } },
+    assistant("a2", 81 * 60_000 + 5000, 0),
+    { type: "custom", id: "c1", customType: "context-budget-omissions-v1", data: ["1", "2", "3"] },
+    assistant("a3", 82 * 60_000, 10),
+  ];
+  assert.deepEqual(trimEventsBefore(branch, "a3"), ["context-budget trimmed 3 tool results"]);
+  assert.deepEqual(trimEventsBefore(branch, "a2"), []);
+  const turns = readTurns(branch);
+  assert.deepEqual(turns[1].events, ["idle 81 min, past the 60 min cache lifetime"]);
+  assert.deepEqual(turns[2].events, ["context-budget trimmed 3 tool results"]);
+});
+
+test("the live hook reports the trim recorded before the reply", () => {
+  const hooks = new Map<string, any>();
+  const entries: any[] = [];
+  const warnings: string[] = [];
+  cacheTelemetry({ on: (name: string, fn: any) => hooks.set(name, fn),
+    appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }),
+    getActiveTools: () => [], registerCommand: () => undefined } as any);
+  const ctx = { hasUI: true, getSystemPrompt: () => "stable", sessionManager: { getBranch: () => entries },
+    ui: { theme: { fg: (_c: string, text: string) => text }, setStatus: () => undefined,
+      notify: (text: string, level: string) => { if (level === "warning") warnings.push(text); } } };
+  hooks.get("session_start")({}, ctx);
+  const reply = (cacheRead: number, timestamp: number) => ({ message: { role: "assistant", timestamp, provider: "p", model: "m",
+    usage: { input: 0, output: 1, cacheRead, cacheWrite: 600000 - cacheRead, totalTokens: 600001, cost: { total: 1 } } } });
+  hooks.get("context")({ messages: [] }, ctx);
+  hooks.get("turn_end")(reply(590000, Date.now()), ctx);
+  entries.push({ type: "custom", customType: "context-budget-omissions-v1", data: Array.from({ length: 36 }, String) });
+  hooks.get("context")({ messages: [] }, ctx);
+  hooks.get("turn_end")(reply(15000, Date.now()), ctx);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Preceding: context-budget trimmed 36 tool results\./);
 });

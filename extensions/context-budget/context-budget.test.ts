@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import contextBudgetExtension, { boundInspectionResults, boundToolResult } from "./index.js";
+import contextBudgetExtension, { boundInspectionResults, boundToolResult, cacheExpired, CACHE_LIFETIME_MS } from "./index.js";
 
 test("large built-in inspection results keep bounded head and tail in model context", () => {
   const source = `HEAD-${"ã".repeat(5000)}-TAIL`;
@@ -215,4 +215,60 @@ test("omission decisions persist across reload and follow the active branch", as
   hooks.get("session_tree")({}, { sessionManager: { getBranch: () => [] } });
   assert.deepEqual((await hooks.get("context")({ messages: history.slice(0, 1) }, ctx)).messages, history.slice(0, 1));
   assert.deepEqual(history, raw, "stored/UI history is intact");
+});
+
+test("a cold cache re-trims early to half budget; a warm cache waits for the budget", () => {
+  const history = Array.from({ length: 12 }, (_, i) => ({ role: "toolResult", toolName: "read", toolCallId: String(i),
+    content: [{ type: "text", text: "x".repeat(1000) }] }));
+  const warm = new Set<string>();
+  boundInspectionResults(history, 4096, 16000, warm);
+  assert.equal(warm.size, 0, "12 KB under a 16 KB budget stays intact while warm");
+  const cold = new Set<string>();
+  const trimmed = boundInspectionResults(history, 4096, 16000, cold, true);
+  assert.equal(cold.size, 4, "cold re-trim keeps the newest 8 KB");
+  assert.equal(trimmed.at(-1), history.at(-1));
+  assert.deepEqual(boundInspectionResults(history, 4096, 16000, cold), trimmed, "the frozen result is stable once warm");
+  const small = new Set<string>();
+  boundInspectionResults(history.slice(0, 6), 4096, 16000, small, true);
+  assert.equal(small.size, 0, "a cold cache under half budget is left alone");
+});
+
+test("cache expiry follows the newest assistant reply", () => {
+  const now = 10 * CACHE_LIFETIME_MS;
+  assert.equal(cacheExpired([], now), false);
+  assert.equal(cacheExpired([{ role: "assistant", timestamp: now - CACHE_LIFETIME_MS - 1 }, { role: "user", timestamp: now }], now), true);
+  assert.equal(cacheExpired([{ role: "assistant", timestamp: 0 }, { role: "assistant", timestamp: now - 1000 }], now), false);
+});
+
+test("the context hook trims early after compaction and after an idle gap", async () => {
+  const hooks = new Map<string, any>();
+  const entries: any[] = [];
+  const pi = { on: (name: string, fn: any) => hooks.set(name, fn),
+    appendEntry: (customType: string, data: unknown) => entries.push({ type: "custom", customType, data }) };
+  const ctx = { sessionManager: { getBranch: () => entries } };
+  const previous = process.env.PI_CONTEXT_TOOL_RESULTS_TOTAL_BYTES;
+  process.env.PI_CONTEXT_TOOL_RESULTS_TOTAL_BYTES = "16384";
+  try {
+    contextBudgetExtension(pi as any);
+  } finally {
+    if (previous === undefined) delete process.env.PI_CONTEXT_TOOL_RESULTS_TOTAL_BYTES;
+    else process.env.PI_CONTEXT_TOOL_RESULTS_TOTAL_BYTES = previous;
+  }
+  hooks.get("session_start")({}, ctx);
+  const results = Array.from({ length: 12 }, (_, i) => ({ role: "toolResult", toolName: "read", toolCallId: String(i),
+    content: [{ type: "text", text: "x".repeat(1000) }] }));
+  const recent = [{ role: "assistant", timestamp: Date.now() }, ...results];
+  await hooks.get("context")({ messages: recent }, ctx);
+  assert.equal(entries.length, 0, "warm and under budget: no trim");
+  hooks.get("session_compact")();
+  await hooks.get("context")({ messages: recent }, ctx);
+  assert.equal(entries.length, 1, "compaction makes the next request trim early");
+  assert.equal(entries[0].data.length, 4);
+  const more = Array.from({ length: 6 }, (_, i) => ({ role: "toolResult", toolName: "read", toolCallId: `late-${i}`,
+    content: [{ type: "text", text: "x".repeat(1000) }] }));
+  await hooks.get("context")({ messages: [...recent, ...more] }, ctx);
+  assert.equal(entries.length, 1, "the compaction flag applies to one request");
+  const stale = [{ role: "assistant", timestamp: Date.now() - CACHE_LIFETIME_MS - 60_000 }, ...results, ...more];
+  await hooks.get("context")({ messages: stale }, ctx);
+  assert.equal(entries.length, 2, "an idle gap past the cache lifetime trims early");
 });
