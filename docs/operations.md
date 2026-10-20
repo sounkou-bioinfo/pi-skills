@@ -319,23 +319,42 @@ the line red and raises a warning with the tokens read and rewritten, the turn's
 cost, its estimated extra cost over a hit (cache-write minus cache-read price
 for the rewritten tokens), and the events observed before it.
 
-Assistant messages already store usage;
-telemetry reuses that data and appends `cache-telemetry-v1` custom entries for
-request diagnostics. These entries do not enter model context. They contain
-usage/cost, classifications, event names, tool-result counts, and SHA-256 digests
-of the observed system prompt and active tool-name order, not prompt text.
+Assistant messages already store usage; telemetry reuses that data and appends
+`cache-telemetry-v1` custom entries for request diagnostics. These entries do
+not enter model context. They contain usage/cost, classifications, event names,
+tool-result counts, and SHA-256 digests of the observed system prompt and active
+tool-name order, not prompt text. For providers whose logical request has an
+`input` or `messages` array, telemetry compares ephemeral item and top-level
+field hashes with the preceding request. It persists only item counts, the
+common-prefix length, the first mismatch position, and changed top-level field
+names. Payload content is not retained; comparison hashes remain in memory and
+reset at session, tree, or model boundaries.
 
 A hit has at least 50% cached input (`input + cacheRead + cacheWrite`, excluding
 output). Low reuse after a comparable provider/model turn is a miss; a first or
 model-switch low-reuse turn is cold. Turns with no input-context tokens are
-unknown. A sharp-drop flag requires more than a 50% drop from at least 4,096 cached tokens while input
-context grows on the same provider/model. Miss rate excludes cold/unknown turns;
-costs include separate cold/unknown buckets. These are reuse heuristics, not
-provider cache verdicts. Compaction, model changes, observed prompt/tool-order
-changes and tool-result counts are diagnostics, not proven causes. Prompt/tool
-hashes are extension-context observations, not final wire-payload fingerprints;
-they cannot detect an arbitrary later provider-payload mutation or tool-schema
-change with unchanged names. Older turns retain usage but may lack diagnostics.
+unknown. A sharp-drop flag requires more than a 50% drop from at least 4,096
+cached tokens while input context grows on the same provider/model. Miss rate
+excludes cold/unknown turns; costs include separate cold/unknown buckets. These
+are reuse heuristics, not provider cache verdicts. Compaction, model changes,
+observed prompt/tool-order changes and tool-result counts are diagnostics, not
+proven causes. Prompt/tool hashes are extension-context observations, not final
+wire-payload fingerprints; they cannot detect a later provider-payload mutation
+or a tool-schema change with unchanged names.
+
+The `before_provider_request` comparison observes the provider-converted logical
+request at this extension's hook position, before transport optimization; a
+later request hook can still modify it. A stable logical prefix does not prove
+that Codex selected `previous_response_id`, that a connection was reused, or
+that the provider accepted a cache entry. The offline
+[`codex-cache-continuity.test.mjs`](../scripts/codex-cache-continuity.test.mjs)
+uses the installed Codex adapter and a fake WebSocket to inspect actual outbound
+frames. It verifies delta selection across a tool continuation and the following
+user turn, and verifies full-context fallback after prompt/history changes or a
+connection reset. Set `PI_CACHE_HOST_DIR` to an installed
+`@earendil-works/pi-coding-agent` directory when testing that host's exact
+adapter. The test does not contact OpenAI or establish provider-side token reuse.
+Older turns retain usage but may lack these diagnostics.
 
 For offline session replay on Node 24+, run:
 

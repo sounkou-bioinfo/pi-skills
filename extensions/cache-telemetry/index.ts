@@ -3,11 +3,19 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-wor
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 const ENTRY_TYPE = "cache-telemetry-v1";
+export type ProviderPayloadContinuity = {
+  field: "input" | "messages"; items: number; previousItems?: number; commonPrefixItems?: number;
+  prefixStable?: boolean; firstMismatch?: number; changedFields?: string[];
+};
+type ProviderPayloadFingerprint = {
+  field: "input" | "messages"; itemHashes: string[]; fieldHashes: Record<string, string>;
+};
 export type CacheTurn = {
   timestamp: number; provider: string; model: string;
   input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number;
   classification: "hit" | "miss" | "cold" | "unknown"; sharpDrop: boolean;
   events: string[]; messageEntryId?: string; toolResults?: number; promptHash?: string; toolsHash?: string;
+  providerPayload?: ProviderPayloadContinuity;
 };
 type MeasuredTurn = Omit<CacheTurn, "classification" | "sharpDrop">;
 
@@ -21,7 +29,56 @@ export function missPenalty(message: any): number {
   return Math.max(0, usage.cacheWrite * (writeRate - readRate));
 }
 
+const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+const jsonHash = (value: unknown) => hash(JSON.stringify(value) ?? "undefined");
 const tokens = (value: number) => value >= 1000 ? `${(value / 1000).toFixed(value >= 100000 ? 0 : 1)}k` : String(value);
+
+export function inspectProviderPayload(payload: unknown, previous?: ProviderPayloadFingerprint):
+  { fingerprint: ProviderPayloadFingerprint; continuity: ProviderPayloadContinuity } | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const record = payload as Record<string, unknown>;
+  const field: "input" | "messages" | undefined = Array.isArray(record.input) ? "input" :
+    Array.isArray(record.messages) ? "messages" : undefined;
+  if (!field) return undefined;
+  const itemHashes = (record[field] as unknown[]).map(jsonHash);
+  const fieldHashes = Object.fromEntries(Object.keys(record).sort()
+    .filter((key) => key !== field && key !== "previous_response_id")
+    .map((key) => [key, jsonHash(record[key])]));
+  const fingerprint = { field, itemHashes, fieldHashes };
+  const continuity: ProviderPayloadContinuity = { field, items: itemHashes.length };
+  if (!previous) return { fingerprint, continuity };
+  continuity.previousItems = previous.itemHashes.length;
+  continuity.changedFields = [...new Set([...Object.keys(previous.fieldHashes), ...Object.keys(fieldHashes)])]
+    .sort().filter((key) => previous.fieldHashes[key] !== fieldHashes[key]);
+  if (previous.field !== field) {
+    continuity.commonPrefixItems = 0;
+    continuity.firstMismatch = 0;
+    continuity.prefixStable = false;
+    continuity.changedFields.unshift("message container");
+    return { fingerprint, continuity };
+  }
+  const comparable = Math.min(previous.itemHashes.length, itemHashes.length);
+  let common = 0;
+  while (common < comparable && previous.itemHashes[common] === itemHashes[common]) common++;
+  continuity.commonPrefixItems = common;
+  if (common < previous.itemHashes.length) continuity.firstMismatch = common;
+  continuity.prefixStable = itemHashes.length >= previous.itemHashes.length &&
+    common === previous.itemHashes.length && continuity.changedFields.length === 0;
+  return { fingerprint, continuity };
+}
+
+export function formatPayloadContinuity(payload?: ProviderPayloadContinuity): string {
+  if (!payload) return "Pre-transport logical request not observed.";
+  if (payload.prefixStable === undefined) {
+    return `Pre-transport logical request: ${payload.field} ${payload.items} items; no preceding comparable request.`;
+  }
+  if (payload.prefixStable) {
+    return `Pre-transport logical request prefix stable: ${payload.commonPrefixItems}/${payload.previousItems} prior ${payload.field} items; static fields stable. Transport continuation unobserved.`;
+  }
+  const location = payload.firstMismatch === undefined ? "item prefix" : `${payload.field}[${payload.firstMismatch}]`;
+  const fields = payload.changedFields?.length ? `; changed fields ${payload.changedFields.join(", ")}` : "";
+  return `Pre-transport logical request drift: ${location}${fields}. Transport continuation unobserved.`;
+}
 
 export function formatCacheStatus(turns: CacheTurn[]): string {
   const last = turns.at(-1);
@@ -38,7 +95,7 @@ export function formatCacheStatus(turns: CacheTurn[]): string {
 export function formatMissAlert(turn: CacheTurn, penalty: number): string {
   return `Cache miss: read ${tokens(turn.cacheRead)}, rewrote ${tokens(turn.cacheWrite)} of ${tokens(turn.input + turn.cacheRead + turn.cacheWrite)} tokens. ` +
     `Turn cost $${turn.cost.toFixed(2)}${penalty > 0 ? ` (about $${penalty.toFixed(2)} more than a hit)` : ""}. ` +
-    `Preceding: ${turn.events.join(", ") || "none observed"}.`;
+    `Preceding: ${turn.events.join(", ") || "none observed"}. ${formatPayloadContinuity(turn.providerPayload)}`;
 }
 
 export function classifyTurn(turn: MeasuredTurn, previous?: CacheTurn): CacheTurn {
@@ -98,14 +155,15 @@ export function formatCacheSummary(turns: CacheTurn[], last = 5): string {
     `Cache (active branch): ${turns.length} turns; ${misses.length} misses; ${measured ? (100 * misses.length / measured).toFixed(1) : "0.0"}% miss rate (hits + misses).`,
     `Cost: misses $${cost(misses)}; hits $${cost(hits)}; cold $${cost(cold)} (${cold.length}); unknown $${cost(unknown)} (${unknown.length}).`,
     "Hit: >=50% cached input. Miss: <50% reuse after a comparable turn, or >50% cache-read drop while input context grew. First/model-switch low reuse is cold. These are heuristics, not provider cache verdicts.",
-    ...misses.slice(-last).map((turn) => `${new Date(turn.timestamp).toISOString()} ${turn.provider}/${turn.model}: read ${turn.cacheRead}, input ${turn.input}, write ${turn.cacheWrite}, total ${turn.totalTokens}, $${turn.cost.toFixed(2)}${turn.sharpDrop ? " [sharp drop]" : ""}; preceding: ${turn.events.join(", ") || "none observed"}; tool results ${turn.toolResults ?? "unknown"}.`),
+    ...misses.slice(-last).map((turn) => `${new Date(turn.timestamp).toISOString()} ${turn.provider}/${turn.model}: read ${turn.cacheRead}, input ${turn.input}, write ${turn.cacheWrite}, total ${turn.totalTokens}, $${turn.cost.toFixed(2)}${turn.sharpDrop ? " [sharp drop]" : ""}; preceding: ${turn.events.join(", ") || "none observed"}; tool results ${turn.toolResults ?? "unknown"}. ${formatPayloadContinuity(turn.providerPayload)}`),
   ].join("\n");
 }
 
 export default function cacheTelemetry(pi: ExtensionAPI): void {
   let turns: CacheTurn[] = [];
   let events: string[] = [];
-  let request: Pick<CacheTurn, "toolResults" | "promptHash" | "toolsHash"> = {};
+  let request: Pick<CacheTurn, "toolResults" | "promptHash" | "toolsHash" | "providerPayload"> = {};
+  let previousPayload: ProviderPayloadFingerprint | undefined;
   const showStatus = (ctx: ExtensionContext) => {
     if (!ctx.hasUI) return;
     const text = formatCacheStatus(turns);
@@ -116,18 +174,23 @@ export default function cacheTelemetry(pi: ExtensionAPI): void {
     turns = readTurns(ctx.sessionManager.getBranch());
     events = [];
     request = {};
+    previousPayload = undefined;
     showStatus(ctx);
   };
   pi.on("session_start", restore);
   pi.on("session_tree", (event, ctx) => { restore(event, ctx); events.push("tree navigation"); });
   pi.on("session_compact", () => { events.push("compaction"); });
-  pi.on("model_select", () => { events.push("model change"); });
+  pi.on("model_select", () => { events.push("model change"); previousPayload = undefined; });
   pi.on("context", (event, ctx) => {
-    const hash = (value: string) => createHash("sha256").update(value).digest("hex");
     request = {
       toolResults: event.messages.filter((message) => message.role === "toolResult").length,
       promptHash: hash(ctx.getSystemPrompt()), toolsHash: hash(JSON.stringify(pi.getActiveTools())),
     };
+  });
+  pi.on("before_provider_request", (event) => {
+    const observed = inspectProviderPayload(event.payload, previousPayload);
+    request = { ...request, providerPayload: observed?.continuity };
+    previousPayload = observed?.fingerprint;
   });
   pi.on("turn_end", (event, ctx) => {
     if (event.message.role !== "assistant") return;

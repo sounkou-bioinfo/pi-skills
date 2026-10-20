@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import cacheTelemetry, { classifyTurn, formatCacheStatus, formatCacheSummary, formatMissAlert, missPenalty, readTurns } from "./index.js";
+import cacheTelemetry, { classifyTurn, formatCacheStatus, formatCacheSummary, formatMissAlert, formatPayloadContinuity,
+  inspectProviderPayload, missPenalty, readTurns } from "./index.js";
 
 const usage = (overrides = {}) => ({ timestamp: 1000, provider: "claude-code", model: "opus",
   input: 5000, output: 1000, cacheRead: 100000, cacheWrite: 0, totalTokens: 106000, cost: 1,
@@ -32,6 +33,28 @@ test("cache-write tokens count as input; output alone does not make context grow
   const previous = classifyTurn(usage());
   assert.equal(classifyTurn(usage({ input: 0, cacheRead: 15000, cacheWrite: 100000 }), previous).sharpDrop, true);
   assert.equal(classifyTurn(usage({ input: 1, cacheRead: 15000, output: 200000, totalTokens: 215001 }), previous).sharpDrop, false);
+});
+
+test("provider payload continuity distinguishes append-only growth from prefix and static drift", () => {
+  const first = inspectProviderPayload({ model: "m", instructions: "private system", tools: [{ name: "read" }],
+    input: [{ role: "user", content: "private first message" }] });
+  assert.ok(first);
+  assert.doesNotMatch(JSON.stringify(first), /private/);
+  assert.equal(first.continuity.prefixStable, undefined);
+  const appended = inspectProviderPayload({ model: "m", instructions: "private system", tools: [{ name: "read" }],
+    input: [{ role: "user", content: "private first message" }, { role: "user", content: "next" }] }, first.fingerprint);
+  assert.deepEqual(appended?.continuity, { field: "input", items: 2, previousItems: 1,
+    changedFields: [], commonPrefixItems: 1, prefixStable: true });
+  const changedItem = inspectProviderPayload({ model: "m", instructions: "private system", tools: [{ name: "read" }],
+    input: [{ role: "user", content: "rewritten" }, { role: "user", content: "next" }] }, first.fingerprint);
+  assert.equal(changedItem?.continuity.firstMismatch, 0);
+  assert.equal(changedItem?.continuity.prefixStable, false);
+  const changedStatic = inspectProviderPayload({ model: "m", instructions: "different system", tools: [{ name: "read" }],
+    input: [{ role: "user", content: "private first message" }, { role: "user", content: "next" }] }, first.fingerprint);
+  assert.deepEqual(changedStatic?.continuity.changedFields, ["instructions"]);
+  assert.equal(changedStatic?.continuity.prefixStable, false);
+  assert.doesNotMatch(JSON.stringify(changedStatic?.continuity), /private|rewritten|different/);
+  assert.match(formatPayloadContinuity(changedItem?.continuity), /Pre-transport logical request drift: input\[0\]/);
 });
 
 test("branch replay reuses assistant usage and restores recorded diagnostics without double counting", () => {
@@ -124,12 +147,20 @@ test("a miss shows a red status and a warning with its cost", () => {
       usage: { input: 2, output: 10, cacheRead, cacheWrite, totalTokens: cacheRead + cacheWrite + 12,
         cost: { cacheRead: cacheRead * 2e-7, cacheWrite: cacheWrite * 8e-6, total } } } });
   hooks.get("session_start")({}, ctx);
+  hooks.get("context")({ messages: [] }, ctx);
+  hooks.get("before_provider_request")({ payload: { model: "m", instructions: "private system",
+    input: [{ role: "user", content: "private first message" }] } });
   hooks.get("turn_end")(turn(600000, 2000, 0.15), ctx);
   assert.equal(warnings.length, 0);
   assert.match(statuses.at(-1)![1], /^dim:cache ✓ 100%/);
+  hooks.get("context")({ messages: [] }, ctx);
+  hooks.get("before_provider_request")({ payload: { model: "m", instructions: "private system",
+    input: [{ role: "user", content: "private first message" }, { role: "user", content: "next" }] } });
   hooks.get("turn_end")(turn(15000, 600000, 5.1), ctx);
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /Cache miss: read 15\.0k, rewrote 600k of 615k tokens\. Turn cost \$5\.10 \(about \$4\.68 more than a hit\)/);
+  assert.match(warnings[0], /Pre-transport logical request prefix stable: 1\/1 prior input items; static fields stable\. Transport continuation unobserved/);
+  assert.doesNotMatch(warnings[0], /private/);
   assert.match(statuses.at(-1)![1], /^error:cache ✗ MISS 2% · turn \$5\.10 · session \$5\.25 · 1 misses \$5\.10$/);
 });
 
@@ -139,5 +170,5 @@ test("miss penalty and status handle missing usage", () => {
   assert.equal(formatCacheStatus([]), "cache –");
   const miss = classifyTurn({ timestamp: 1, provider: "p", model: "m", input: 0, output: 0, cacheRead: 10, cacheWrite: 990,
     totalTokens: 1000, cost: 1, events: [] });
-  assert.match(formatMissAlert(miss, 0), /Turn cost \$1\.00\. Preceding: none observed\.$/);
+  assert.match(formatMissAlert(miss, 0), /Turn cost \$1\.00\. Preceding: none observed\. Pre-transport logical request not observed\.$/);
 });
