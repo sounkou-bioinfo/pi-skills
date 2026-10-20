@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,7 +10,8 @@ import { Type } from "typebox";
 const repo = fileURLToPath(new URL("..", import.meta.url));
 const host = path.join(repo, "node_modules/@earendil-works/pi-coding-agent");
 const sdk = await import(pathToFileURL(path.join(host, "dist/index.js")).href);
-const { createAssistantMessageEventStream, InMemoryCredentialStore } = await import(pathToFileURL(path.join(host, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+const piAi = [path.join(host, "node_modules/@earendil-works/pi-ai"), path.join(host, "../pi-ai")].find((directory) => existsSync(directory));
+const { createAssistantMessageEventStream, InMemoryCredentialStore } = await import(pathToFileURL(path.join(piAi, "dist/index.js")).href);
 
 test("source-loaded cache extensions preserve provider prefixes, session reopen and active-branch omissions", { timeout: 30000 }, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "pi-cache-context-"));

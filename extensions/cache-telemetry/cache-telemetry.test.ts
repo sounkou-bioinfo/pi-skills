@@ -55,6 +55,21 @@ test("branch replay reuses assistant usage and restores recorded diagnostics wit
   assert.equal(readTurns([{ type: "message", message: message(1000) }] as any)[0].classification, "hit");
 });
 
+test("replay binds diagnostics to message entries when timestamps collide", () => {
+  const message = { role: "assistant", timestamp: 1000, provider: "claude-code", model: "opus",
+    usage: { input: 5000, output: 1000, cacheRead: 100000, cacheWrite: 0, totalTokens: 106000, cost: { total: 1 } } };
+  const first = { ...classifyTurn(usage({ events: ["first"] })), messageEntryId: "assistant-1" };
+  const second = { ...classifyTurn(usage({ events: ["second"] })), messageEntryId: "assistant-2" };
+  const turns = readTurns([
+    { id: "assistant-1", type: "message", message },
+    { id: "assistant-2", type: "message", message },
+    { type: "custom", customType: "cache-telemetry-v1", data: first },
+    { type: "custom", customType: "cache-telemetry-v1", data: second },
+  ] as any);
+
+  assert.deepEqual(turns.map((turn) => turn.events), [["first"], ["second"]]);
+});
+
 test("extension observes without mutating context and persists diagnostics outside model history", async () => {
   const hooks = new Map<string, any>();
   const entries: any[] = [];
@@ -75,8 +90,10 @@ test("extension observes without mutating context and persists diagnostics outsi
   assert.deepEqual(messages, source);
   hooks.get("session_compact")();
   hooks.get("model_select")();
-  hooks.get("turn_end")({ message: { role: "assistant", ...usage(), usage: { ...usage(), cost: { total: 1 } } } }, ctx);
+  hooks.get("turn_end")({ messageEntryId: "assistant-1",
+    message: { role: "assistant", ...usage(), usage: { ...usage(), cost: { total: 1 } } } }, ctx);
   assert.equal(entries.length, 1);
+  assert.equal(entries[0].data.messageEntryId, "assistant-1");
   assert.equal(entries[0].data.toolResults, 1);
   assert.deepEqual(entries[0].data.events, ["compaction", "model change"]);
   await command.handler("2", ctx);
@@ -102,9 +119,10 @@ test("a miss shows a red status and a warning with its cost", () => {
     ui: { theme: { fg: (color: string, text: string) => `${color}:${text}` },
       setStatus: (_key: string, text: string) => statuses.push([_key, text]),
       notify: (text: string, level: string) => { if (level === "warning") warnings.push(text); } } };
-  const turn = (cacheRead: number, cacheWrite: number, total: number) => ({ message: { role: "assistant", timestamp: Date.now(),
-    provider: "p", model: "m", usage: { input: 2, output: 10, cacheRead, cacheWrite, totalTokens: cacheRead + cacheWrite + 12,
-      cost: { cacheRead: cacheRead * 2e-7, cacheWrite: cacheWrite * 8e-6, total } } } });
+  const turn = (cacheRead: number, cacheWrite: number, total: number) => ({ messageEntryId: `assistant-${cacheRead}-${cacheWrite}`,
+    message: { role: "assistant", timestamp: Date.now(), provider: "p", model: "m",
+      usage: { input: 2, output: 10, cacheRead, cacheWrite, totalTokens: cacheRead + cacheWrite + 12,
+        cost: { cacheRead: cacheRead * 2e-7, cacheWrite: cacheWrite * 8e-6, total } } } });
   hooks.get("session_start")({}, ctx);
   hooks.get("turn_end")(turn(600000, 2000, 0.15), ctx);
   assert.equal(warnings.length, 0);

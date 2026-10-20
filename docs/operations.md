@@ -327,8 +327,8 @@ of the observed system prompt and active tool-name order, not prompt text.
 
 A hit has at least 50% cached input (`input + cacheRead + cacheWrite`, excluding
 output). Low reuse after a comparable provider/model turn is a miss; a first or
-model-switch low-reuse turn is cold. Zero-input turns are unknown. A sharp-drop
-flag requires more than a 50% drop from at least 4,096 cached tokens while input
+model-switch low-reuse turn is cold. Turns with no input-context tokens are
+unknown. A sharp-drop flag requires more than a 50% drop from at least 4,096 cached tokens while input
 context grows on the same provider/model. Miss rate excludes cold/unknown turns;
 costs include separate cold/unknown buckets. These are reuse heuristics, not
 provider cache verdicts. Compaction, model changes, observed prompt/tool-order
@@ -340,9 +340,9 @@ change with unchanged names. Older turns retain usage but may lack diagnostics.
 For offline session replay on Node 24+, run:
 
 ```sh
-node /home/biouser/.pi/agent/git/github.com/sounkou-bioinfo/pi-skills/scripts/analyze_cache_misses.mjs \
-  /home/biouser/.pi/agent/sessions/--home-biouser-DevOps-ulcwgs--/2026-09-08T08-57-25-078Z_01a0803c-8556-75b3-a1ca-f7d11e0dc808.jsonl \
-  /home/biouser/.nvm/versions/node/v24.14.1/lib/node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js
+node scripts/analyze_cache_misses.mjs \
+  /path/to/session.jsonl \
+  /path/to/@earendil-works/pi-coding-agent/dist/core/session-manager.js
 ```
 
 Use the core module matching the log's Pi version. Replay takes a byte-bounded

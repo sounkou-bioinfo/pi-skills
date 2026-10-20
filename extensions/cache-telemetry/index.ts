@@ -7,7 +7,7 @@ export type CacheTurn = {
   timestamp: number; provider: string; model: string;
   input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number;
   classification: "hit" | "miss" | "cold" | "unknown"; sharpDrop: boolean;
-  events: string[]; toolResults?: number; promptHash?: string; toolsHash?: string;
+  events: string[]; messageEntryId?: string; toolResults?: number; promptHash?: string; toolsHash?: string;
 };
 type MeasuredTurn = Omit<CacheTurn, "classification" | "sharpDrop">;
 
@@ -55,11 +55,13 @@ export function classifyTurn(turn: MeasuredTurn, previous?: CacheTurn): CacheTur
 // Usage already lives in assistant messages. Custom entries add request diagnostics
 // without injecting telemetry into model context; older turns use their stored usage.
 export function readTurns(entries: readonly SessionEntry[]): CacheTurn[] {
-  const diagnostics = new Map<number, CacheTurn>();
+  const diagnosticsByEntry = new Map<string, CacheTurn>();
+  const legacyDiagnostics = new Map<number, CacheTurn>();
   for (const entry of entries) {
     if (entry.type === "custom" && entry.customType === ENTRY_TYPE) {
       const data = entry.data as CacheTurn;
-      diagnostics.set(data.timestamp, data);
+      if (data.messageEntryId) diagnosticsByEntry.set(data.messageEntryId, data);
+      else legacyDiagnostics.set(data.timestamp, data);
     }
   }
   const turns: CacheTurn[] = [];
@@ -70,7 +72,7 @@ export function readTurns(entries: readonly SessionEntry[]): CacheTurn[] {
     if (entry.type === "branch_summary") events.push("branch summary");
     const message = entry.type === "message" ? entry.message : undefined;
     if (message?.role !== "assistant" || !message.usage) continue;
-    const saved = diagnostics.get(message.timestamp);
+    const saved = diagnosticsByEntry.get(entry.id) ?? legacyDiagnostics.get(message.timestamp);
     turns.push(classifyTurn({ ...measure(message), ...saved,
       events: saved?.events ?? (events.length ? events : ["request diagnostics not recorded"]) }, turns.at(-1)));
     events = [];
@@ -132,7 +134,8 @@ export default function cacheTelemetry(pi: ExtensionAPI): void {
     const previous = turns.at(-1);
     if (previous?.promptHash && request.promptHash !== previous.promptHash) events.push("system prompt changed");
     if (previous?.toolsHash && request.toolsHash !== previous.toolsHash) events.push("active tool order/set changed");
-    const turn = classifyTurn({ ...measure(event.message), ...request, events: [...new Set(events)] }, previous);
+    const turn = classifyTurn({ ...measure(event.message), ...request, messageEntryId: event.messageEntryId,
+      events: [...new Set(events)] }, previous);
     turns.push(turn);
     pi.appendEntry(ENTRY_TYPE, turn);
     events = [];
