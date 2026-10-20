@@ -91,6 +91,52 @@ test("relays one upstream Messages request and captures its SSE response", async
   }
 });
 
+test("cancellation after reading a body prevents the payload hook from starting", async (t) => {
+  let hookCalls = 0;
+  const relay = new TurnRelay("http://127.0.0.1:1", 5000, undefined, (body) => { hookCalls++; return body; });
+  t.mock.method(relay as any, "readBody", async () => {
+    relay.abort();
+    return Buffer.from("{}");
+  });
+  try {
+    const url = await relay.start();
+    await fetch(`${url}/v1/messages`, { method: "POST", body: "{}" }).catch(() => undefined);
+    await relay.settled();
+    assert.equal(hookCalls, 0);
+  } finally {
+    await relay.close();
+  }
+});
+
+test("an aborted async request hook cannot forward a request", async () => {
+  let forwarded = 0;
+  const upstream = http.createServer((_request, response) => { forwarded++; response.end(); });
+  const port = await listen(upstream);
+  let enter!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const relay = new TurnRelay(`http://127.0.0.1:${port}`, 5000, undefined, async (body) => {
+    enter();
+    await blocked;
+    return body;
+  });
+  try {
+    const url = await relay.start();
+    const request = fetch(`${url}/v1/messages`, { method: "POST", body: "{}" }).catch(() => undefined);
+    await entered;
+    relay.abort();
+    release();
+    await request;
+    await relay.settled();
+    assert.equal(forwarded, 0);
+  } finally {
+    release();
+    await relay.close();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  }
+});
+
 test("surfaces an error event from an otherwise successful SSE stream", async () => {
   const upstream = http.createServer(async (request, response) => {
     for await (const _chunk of request);

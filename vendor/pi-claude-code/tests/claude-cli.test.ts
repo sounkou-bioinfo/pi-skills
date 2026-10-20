@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import * as http from "node:http";
+import https from "node:https";
+import { syncBuiltinESMExports } from "node:module";
 import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { normalizeContext } from "@earendil-works/pi-ai";
 import {
   cachedClaudeProcessCount,
   closeClaudeProcesses,
@@ -11,6 +15,7 @@ import {
   runClaudeRequest,
 } from "../src/claude-cli.ts";
 import { createClaudeCodeProvider } from "../src/provider.ts";
+import { streamClaudeCode } from "../src/stream.ts";
 
 test("stabilizes Claude Code's native replay reminders and cache breakpoint", () => {
   const canonical = [{ type: "text", text: "inspect" }];
@@ -138,6 +143,170 @@ test("injects native system history at assistant boundaries", () => {
     (rewritten.messages.at(-1)?.content as Array<Record<string, unknown>>).at(-1)?.cache_control,
     { type: "ephemeral", ttl: "1h" },
   );
+});
+
+test("replay budgets four protocol cache markers without changing nested tool data", () => {
+  const marker = { type: "ephemeral", ttl: "1h" };
+  const input = {
+    tools: [{ name: "read", input_schema: { type: "object" }, cache_control: marker },
+      { name: "later", input_schema: { type: "object" }, defer_loading: true }],
+    system: [{ type: "text", text: "system", cache_control: marker }, { type: "text", text: "stable suffix" }],
+    messages: [
+      { role: "user", content: [{ type: "text", text: "one" }] },
+      { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "read",
+        input: { cache_control: "application data" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "two" }] },
+      { role: "assistant", content: [{ type: "text", text: "answer" }] },
+      { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "AA==" }, cache_control: marker }] },
+      { role: "system", content: [{ type: "text", text: "trailing reminder" }] },
+    ],
+  };
+  for (const nativeInjections of [undefined, []]) {
+    const rewrite = (body: Buffer) => rewriteInitialRequest(body, undefined, input.messages[0]!.content, undefined, nativeInjections);
+    const once = rewrite(Buffer.from(JSON.stringify(input)));
+    const final = JSON.parse(once.toString());
+    const blocks = [...final.tools, ...final.system, ...final.messages.flatMap((message: any) => message.content)];
+    assert.equal(blocks.filter((block: any) => block.cache_control).length, 4);
+    assert.deepEqual(final.tools[0].cache_control, marker);
+    assert.equal(final.tools[1].cache_control, undefined);
+    assert.equal(final.system[0].cache_control, undefined);
+    assert.deepEqual(final.system[1].cache_control, marker);
+    assert.equal(final.messages[4].content[0].cache_control, undefined);
+    assert.deepEqual(final.messages[2].content[0].cache_control, marker);
+    assert.deepEqual(final.messages[5].content[0].cache_control, marker);
+    assert.equal(final.messages[1].content[0].input.cache_control, "application data");
+    assert.deepEqual(rewrite(once), once);
+    final.cache_control = marker;
+    final.system.unshift({ type: "text", text: "another system block", cache_control: marker });
+    final.tools.unshift({ name: "other", input_schema: { type: "object" }, cache_control: marker });
+    final.messages[0].content[0].cache_control = marker;
+    const normalized = JSON.parse(rewrite(Buffer.from(JSON.stringify(final))).toString());
+    assert.equal(normalized.cache_control, undefined);
+    assert.equal([...normalized.tools, ...normalized.system, ...normalized.messages.flatMap((m: any) => m.content)]
+      .filter((block: any) => block.cache_control).length, 4);
+  }
+});
+
+test("rewritten Claude requests cross async payload hooks and the loopback relay once per turn", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pi-claude-payload-"));
+  const command = join(root, "claude.mjs");
+  const received: any[] = [];
+  const upstream = http.createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    received.push(JSON.parse(body));
+    const usage = { input_tokens: 2, output_tokens: 1 };
+    const events = [
+      { type: "message_start", message: { id: "reply", role: "assistant", content: [], usage } },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "hello" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage },
+      { type: "message_stop" },
+    ];
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  const address = upstream.address() as { port: number };
+  await writeFile(command, `#!/usr/bin/env node
+import { readFileSync } from 'node:fs';
+import readline from 'node:readline';
+if (process.argv.includes('auth')) {
+  console.log(JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', subscriptionType: 'fixture' }));
+  process.exit(0);
+}
+const settings = JSON.parse(readFileSync(process.argv[process.argv.indexOf('--settings') + 1], 'utf8'));
+const extra = JSON.parse(settings.env.CLAUDE_CODE_EXTRA_BODY);
+const history = [];
+const marker = { type: 'ephemeral', ttl: '1h' };
+for await (const line of readline.createInterface({ input: process.stdin })) {
+  const frame = JSON.parse(line);
+  if (frame.type === 'control_request') {
+    console.log(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response: {} } }));
+    continue;
+  }
+  history.push(frame.message);
+  if (frame.shouldQuery === false) {
+    console.log(JSON.stringify({ type: 'result', num_turns: 0 }));
+    continue;
+  }
+  const body = { ...extra, system: [{ type: 'text', text: 'system', cache_control: marker }],
+    messages: [...history, { role: 'system', content: [{ type: 'text', text: 'tail' }] }] };
+  body.messages.at(-2).content.at(-1).cache_control = marker;
+  const response = await fetch(process.env.ANTHROPIC_BASE_URL + '/v1/messages', { method: 'POST', body: JSON.stringify(body) });
+  await response.text();
+  const message = { id: 'reply', role: 'assistant', content: [{ type: 'text', text: 'hello' }], stop_reason: 'end_turn', usage: { input_tokens: 2, output_tokens: 1 } };
+  history.push({ role: message.role, content: message.content });
+  console.log(JSON.stringify({ type: 'stream_event', event: { type: 'message_stop' } }));
+  console.log(JSON.stringify({ type: 'assistant', message }));
+  console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false }));
+}
+`, "utf8");
+  await chmod(command, 0o755);
+  const frames: any[] = [
+    { type: "user", message: { role: "user", content: [{ type: "text", text: "one" }] }, shouldQuery: false },
+    { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "mcp__pi__read", input: { path: "a" } }] }, shouldQuery: false },
+    { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "two" }] }, shouldQuery: false },
+    { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "hello" }] }, shouldQuery: false },
+    { type: "user", message: { role: "user", content: [{ type: "text", text: "three" }] } },
+  ];
+  const input = { model: "sonnet", systemPrompt: "system", frames, manifest: [],
+    extraBody: { tools: [{ name: "mcp__pi__read", input_schema: { type: "object" }, cache_control: { type: "ephemeral", ttl: "1h" } }] },
+    nativeSystemInjections: [], toolNames: new Set<string>(), timeoutMs: 5000,
+    env: { PI_CLAUDE_CODE_COMMAND: command }, upstreamUrl: `http://127.0.0.1:${address.port}`, sessionId: "payload-boundary" };
+  const observed: any[] = [];
+  try {
+    const first = await runClaudeRequest({ ...input, onPayload: async (payload) => {
+      await Promise.resolve();
+      const body = payload as any;
+      assert.equal([...body.tools, ...body.system, ...body.messages.flatMap((m: any) => m.content)]
+        .filter((block: any) => block.cache_control).length, 4);
+      body.metadata = { user_id: "mutated" };
+      observed.push(structuredClone(body));
+    } });
+    assert.equal(first.relay.upstreamRequests, 1);
+    assert.deepEqual(received, observed);
+    assert.equal(cachedClaudeProcessCount(), 1);
+    const followup = [...frames, { type: "assistant", message: { role: "assistant", content: first.message.content } },
+      { type: "user", message: { role: "user", content: [{ type: "text", text: "four" }] } }];
+    await runClaudeRequest({ ...input, frames: followup as any, onPayload: async (payload) => {
+      const replacement = { ...(payload as any), metadata: { user_id: "replaced" } };
+      observed.push(structuredClone(replacement));
+      return replacement;
+    } });
+    assert.deepEqual(received, observed);
+    assert.equal(received.length, 2);
+    await assert.rejects(runClaudeRequest({ ...input, onPayload: () => { throw new Error("hook rejected"); } }));
+    assert.equal(received.length, 2);
+
+    // Block HTTPS independently of the hook so a regression stays offline.
+    let externalRequests = 0;
+    t.mock.method(https, "request", () => { externalRequests++; throw new Error("HTTPS forbidden in fixture"); });
+    syncBuiltinESMExports();
+    let hookCalls = 0;
+    const model: any = { id: "claude-sonnet-5", name: "fixture", api: "claude-code-stream-json",
+      provider: "claude-code", reasoning: true, input: ["text"], baseUrl: "process://claude-code",
+      contextWindow: 200000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+    const result = await streamClaudeCode(model, normalizeContext({ messages: [{ role: "user", content: "inspect", timestamp: 1 }] }), {
+      env: input.env, timeoutMs: 5000, onPayload: async (payload, actualModel) => {
+        assert.equal(actualModel, model);
+        assert.ok((payload as any).messages.length);
+        hookCalls++;
+        throw new Error("offline stop before upstream");
+      },
+    }).result();
+    assert.equal(hookCalls, 1);
+    assert.equal(externalRequests, 0);
+    assert.equal(result.stopReason, "error");
+    assert.equal(received.length, 2);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    await closeClaudeProcesses();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("runs a request through a stream-json Claude executable", async () => {

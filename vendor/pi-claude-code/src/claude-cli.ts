@@ -59,6 +59,8 @@ export interface RunClaudeInput {
   /** Beta features appended to Claude Code's own request header by the turn relay. */
   betas?: string[];
   onEvent?: (event: AnthropicStreamEvent) => void;
+  /** Observe or replace the rewritten request before it reaches the upstream. */
+  onPayload?: (payload: unknown) => unknown | undefined | Promise<unknown | undefined>;
   /** Pi session whose linear continuation may reuse a warm Claude process. */
   sessionId?: string;
 }
@@ -541,19 +543,18 @@ function setCacheBreakpoint(message: NativeRequestMessage): void {
 }
 
 function setReplayCacheBreakpoints(messages: NativeRequestMessage[]): void {
+  // Reserve two message slots after the tool and leading-system boundaries.
+  // Only protocol-level fields are markers; nested tool arguments are data.
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (block && typeof block === "object") delete block.cache_control;
+    }
+  }
   const userIndexes = messages
     .map((message, index) => (message.role === "user" ? index : -1))
     .filter((index) => index >= 0);
-  if (userIndexes.length >= 3) {
-    // Claude permits four cache breakpoints. Its two system-prompt markers
-    // consume half of them, so once a prior queried user exists, move the
-    // native environment marker to that exact previous query boundary. This
-    // avoids relying on automatic lookback (notably unreliable with images).
-    for (const message of messages) {
-      if (message.role === "system") message.content = withoutCacheControl(message.content);
-    }
-    setCacheBreakpoint(messages[userIndexes.at(-2)!]!);
-  }
+  if (userIndexes.length >= 3) setCacheBreakpoint(messages[userIndexes.at(-2)!]!);
   const final = messages.at(-1);
   if (final) setCacheBreakpoint(final);
 }
@@ -618,14 +619,17 @@ function injectNativeSystemMessages(
   return output;
 }
 
-function normalizeLeadingSystemCache(system: unknown): void {
-  if (!Array.isArray(system)) return;
-  for (const block of system) {
+function normalizeCacheBoundary(blocks: unknown, preserveExisting = false): void {
+  if (!Array.isArray(blocks)) return;
+  // Tool declarations retain their boundary before deferred tools; the leading
+  // system prompt is cached through its final block.
+  const existing = preserveExisting && blocks.findLast((block) => block && typeof block === "object" && block.cache_control);
+  const boundary = existing || blocks.at(-1);
+  for (const block of blocks) {
     if (block && typeof block === "object") delete (block as Record<string, unknown>).cache_control;
   }
-  const last = system.at(-1);
-  if (last && typeof last === "object") {
-    (last as Record<string, unknown>).cache_control = { type: "ephemeral", ttl: "1h" };
+  if (boundary && typeof boundary === "object") {
+    (boundary as Record<string, unknown>).cache_control = { type: "ephemeral", ttl: "1h" };
   }
 }
 
@@ -639,6 +643,8 @@ export function rewriteInitialRequest(
   const payload = JSON.parse(body.toString("utf8")) as {
     messages?: NativeRequestMessage[];
     system?: unknown;
+    tools?: unknown;
+    cache_control?: unknown;
   };
   let messages = payload.messages;
   const first = messages?.[0];
@@ -666,9 +672,12 @@ export function rewriteInitialRequest(
   if (nativeSystemInjections) {
     messages = injectNativeSystemMessages(messages!, nativeSystemInjections);
     payload.messages = messages;
-    normalizeLeadingSystemCache(payload.system);
   }
-  if (initialSystemMessages?.length || nativeSystemInjections) setReplayCacheBreakpoints(messages!);
+  // Use explicit boundaries rather than automatic caching's additional slot.
+  delete payload.cache_control;
+  normalizeCacheBoundary(payload.tools, true);
+  normalizeCacheBoundary(payload.system);
+  setReplayCacheBreakpoints(messages!);
 
   return Buffer.from(JSON.stringify(payload));
 }
@@ -900,16 +909,19 @@ class ClaudeProcess {
     const canonicalInitialUser = input.frames.find((frame) => frame.type === "user")?.message.content ?? [];
     this.relay.beginTurn(
       deliver,
-      input.initialUserPrefix || input.initialSystemMessages || input.nativeSystemInjections
-        ? (body) =>
-            rewriteInitialRequest(
-              body,
-              input.initialUserPrefix,
-              canonicalInitialUser,
-              input.initialSystemMessages,
-              input.nativeSystemInjections,
-            )
-        : undefined,
+      async (body) => {
+        const rewritten = rewriteInitialRequest(
+          body,
+          input.initialUserPrefix,
+          canonicalInitialUser,
+          input.initialSystemMessages,
+          input.nativeSystemInjections,
+        );
+        if (!input.onPayload) return rewritten;
+        const payload: unknown = JSON.parse(rewritten.toString("utf8"));
+        const replacement = await input.onPayload(payload);
+        return Buffer.from(JSON.stringify(replacement ?? payload));
+      },
       input.betas,
     );
 

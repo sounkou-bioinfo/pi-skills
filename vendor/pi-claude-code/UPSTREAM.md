@@ -25,6 +25,13 @@ Claude-compatible identifiers and applies the same conversion to linked tool
 results. This keeps cross-provider transcripts valid without changing Pi's
 stored messages.
 
+[0003-cache-request-boundary.patch](../../scripts/vendor/pi-claude-code/patches/0003-cache-request-boundary.patch)
+budgets four explicit cache markers across tools, the leading system prompt,
+and replay messages. It exposes the rewritten JSON to Pi's asynchronous payload
+hook before forwarding; hook rejection or cancellation prevents forwarding.
+Loopback CLI/HTTP fixtures cover the composed request, process reuse, and hook
+mutation/replacement without live subscription calls.
+
 This provenance file comes from the [overlay](../../scripts/vendor/pi-claude-code/overlay/UPSTREAM.md).
 Edit the manifest, ordered patches, or overlay inputs, not generated files under
 `vendor/pi-claude-code/`. There are no install-time patches or downloads.

@@ -39,7 +39,7 @@ test("source-loaded cache extensions preserve provider prefixes, session reopen 
         pi.registerTool({ name: "read", label: "Fixture read", description: "Return deterministic inspection text", parameters: Type.Object({}),
           async execute() { return { content: [{ type: "text", text: "x".repeat(4000) }] }; } });
         pi.registerProvider("cache-test", { api: model.api, baseUrl: model.baseUrl, apiKey: "offline", models: [model],
-          streamSimple(model, context) {
+          streamSimple(model, context, options) {
             requests.push({ messages: structuredClone(context.messages),
               trimCount: manager.getBranch().filter((e) => e.type === "custom" && e.customType === "context-budget-omissions-v1").length });
             const toolUse = context.messages.at(-1)?.role === "user";
@@ -49,8 +49,19 @@ test("source-loaded cache extensions preserve provider prefixes, session reopen 
               usage: { input: 5000, output: 100, cacheRead: 100000, cacheWrite: 0, totalTokens: 105100,
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 1 } } };
             const stream = createAssistantMessageEventStream();
-            stream.push({ type: "start", partial: message });
-            stream.push({ type: "done", reason: message.stopReason, message }); stream.end(); return stream;
+            queueMicrotask(async () => {
+              try {
+                await options?.onPayload?.({ messages: context.messages }, model);
+                stream.push({ type: "start", partial: message });
+                stream.push({ type: "done", reason: message.stopReason, message });
+              } catch (error) {
+                message.stopReason = "error";
+                message.errorMessage = String(error);
+                stream.push({ type: "error", reason: "error", error: message });
+              }
+              stream.end();
+            });
+            return stream;
           } });
       }],
     });
@@ -82,6 +93,13 @@ test("source-loaded cache extensions preserve provider prefixes, session reopen 
     const telemetry = branch.filter((e) => e.type === "custom" && e.customType === "cache-telemetry-v1");
     assert.equal(telemetry.length, 24);
     assert(telemetry.every((e) => e.data.provider === model.provider && e.data.classification === "hit"));
+    const trims = branch.filter((e) => e.type === "custom" && e.customType === "context-budget-omissions-v1");
+    assert.equal(telemetry.filter((e) => e.data.trimmedResults > 0).length, trims.length);
+    assert.equal(telemetry.reduce((sum, e) => sum + (e.data.trimmedResults ?? 0), 0),
+      trims.reduce((sum, e) => sum + e.data.length, 0));
+    for (let i = 1; i < telemetry.length; i++) {
+      assert.equal(telemetry[i].data.providerPayload.prefixStable, requests[i].trimCount === requests[i - 1].trimCount);
+    }
     const file = manager.getSessionFile();
     session.dispose(); session = undefined;
     manager = sdk.SessionManager.open(file);

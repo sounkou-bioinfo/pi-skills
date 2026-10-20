@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Budget Claude replay caching across tools, system and messages with at most four explicit markers. Run Pi's asynchronous payload hook on the rewritten relay request and prevent forwarding on hook rejection or cancellation. Cover process reuse and the final forwarded body with offline CLI/HTTP fixtures.
+- Report observed context-budget trim counts and elapsed request gaps without asserting cache expiry. Label usage-cost estimates separately from subscription charges and preserve the hard retained-text bound; elapsed time alone does not trigger trimming.
 - Normalize tool-call identifiers when replaying another provider's history through Claude Code. Claude-compatible identifiers are stable and limited to 64 ASCII identifier characters, and each tool result uses the same normalized identifier.
 - Require Pi 1.0 (development types 1.0.1). Supply the memory, mandatory-skills, expert-discipline, and local-review policies as named `before_agent_start` prompt sections, so Pi keeps the system prompt structured and sends later changes as section updates; none of the hooks replaces the whole prompt. SDK harnesses read the provider-visible prompt from the transcript's system message and locate the host's `pi-ai` whether nested or hoisted. Add a real-SDK memory test for prompt stability and projection placement.
 

@@ -149,26 +149,82 @@ test("a miss shows a red status and a warning with its cost", () => {
   hooks.get("session_start")({}, ctx);
   hooks.get("context")({ messages: [] }, ctx);
   hooks.get("before_provider_request")({ payload: { model: "m", instructions: "private system",
-    input: [{ role: "user", content: "private first message" }] } });
+    input: [{ role: "user", content: "private first message" }] } }, ctx);
   hooks.get("turn_end")(turn(600000, 2000, 0.15), ctx);
   assert.equal(warnings.length, 0);
   assert.match(statuses.at(-1)![1], /^dim:cache ✓ 100%/);
   hooks.get("context")({ messages: [] }, ctx);
   hooks.get("before_provider_request")({ payload: { model: "m", instructions: "private system",
-    input: [{ role: "user", content: "private first message" }, { role: "user", content: "next" }] } });
+    input: [{ role: "user", content: "private first message" }, { role: "user", content: "next" }] } }, ctx);
   hooks.get("turn_end")(turn(15000, 600000, 5.1), ctx);
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /Cache miss: read 15\.0k, rewrote 600k of 615k tokens\. Turn cost \$5\.10 \(about \$4\.68 more than a hit\)/);
+  assert.match(warnings[0], /Cache miss: read 15\.0k, uncached 2, wrote 600k of 615k input tokens\. Estimated usage cost \$5\.10 \(estimated cache-write premium \$4\.68\); not a subscription charge/);
   assert.match(warnings[0], /Pre-transport logical request prefix stable: 1\/1 prior input items; static fields stable\. Transport continuation unobserved/);
   assert.doesNotMatch(warnings[0], /private/);
-  assert.match(statuses.at(-1)![1], /^error:cache ✗ MISS 2% · turn \$5\.10 · session \$5\.25 · 1 misses \$5\.10$/);
+  assert.match(statuses.at(-1)![1], /^error:cache ✗ MISS 2% · est\. turn \$5\.10 · session \$5\.25 · 1 misses \$5\.10$/);
+});
+
+test("request diagnostics record gaps and trims once without asserting cache expiry", (t) => {
+  let now = 1000000;
+  t.mock.method(Date, "now", () => now);
+  const hooks = new Map<string, any>();
+  const records: any[] = [];
+  const previous = { role: "assistant", ...usage(), usage: { ...usage(), cost: { total: 1 } } };
+  let branch: any[] = [
+    { id: "previous", type: "message", timestamp: new Date(now).toISOString(), message: previous },
+    { id: "old-trim", type: "custom", customType: "context-budget-omissions-v1", data: ["old"] },
+  ];
+  cacheTelemetry({
+    on: (name: string, handler: any) => hooks.set(name, handler),
+    getActiveTools: () => [], registerCommand: () => undefined,
+    appendEntry: (_type: string, data: any) => { records.push(data); },
+  } as any);
+  const ctx = { hasUI: false, getSystemPrompt: () => "stable", sessionManager: { getBranch: () => branch } };
+  const request = () => hooks.get("context")({ messages: [] }, ctx);
+  const provider = () => hooks.get("before_provider_request")({ payload: { input: ["private"] } }, ctx);
+  const finish = () => hooks.get("turn_end")({ messageEntryId: `reply-${now}`, message: previous }, ctx);
+  hooks.get("session_start")({}, ctx);
+  now += 81 * 60000;
+  request();
+  // This receipt arrives after telemetry's context hook, before the provider hook.
+  branch.push({ id: "trim-36", type: "custom", customType: "context-budget-omissions-v1",
+    data: Array.from({ length: 36 }, (_, i) => `result-${i}`) });
+  provider();
+  provider();
+  finish();
+  assert.equal(records[0].requestGapMs, 81 * 60000);
+  assert.equal(records[0].trimmedResults, 36);
+  assert.deepEqual(records[0].events, [
+    "context-budget trimmed 36 results",
+    "gap 81.0 min since prior assistant record (cache expiry unverified)",
+  ]);
+  assert.doesNotMatch(JSON.stringify(records), /private|result-0|cache expired/);
+  now += 500;
+  request(); provider(); finish();
+  assert.equal(records[1].requestGapMs, 500);
+  assert.equal(records[1].trimmedResults, undefined);
+  assert.deepEqual(records[1].events, []);
+
+  // Reopening a branch consumes its existing receipts as history, not new trims.
+  hooks.get("session_start")({}, ctx);
+  request(); provider(); finish();
+  assert.equal(records[2].trimmedResults, undefined);
+  branch = [];
+  hooks.get("session_start")({ reason: "new" }, ctx);
+  request(); provider(); finish();
+  assert.equal(records[3].requestGapMs, undefined);
+  assert.equal(records[3].providerPayload.prefixStable, undefined);
+  hooks.get("session_start")({ reason: "fork" }, ctx);
+  request(); provider(); finish();
+  assert.equal(records[4].requestGapMs, undefined);
+  assert.equal(records[4].providerPayload.prefixStable, undefined);
 });
 
 test("miss penalty and status handle missing usage", () => {
   assert.equal(missPenalty({}), 0);
-  assert.equal(missPenalty({ usage: { cacheWrite: 1000, cacheRead: 0, cost: { cacheWrite: 0.008 } } }), 0.008 - 0.008 / 12.5);
+  assert.equal(missPenalty({ usage: { cacheWrite: 1000, cacheRead: 0, cost: { cacheWrite: 0.008 } } }), 0);
   assert.equal(formatCacheStatus([]), "cache –");
   const miss = classifyTurn({ timestamp: 1, provider: "p", model: "m", input: 0, output: 0, cacheRead: 10, cacheWrite: 990,
     totalTokens: 1000, cost: 1, events: [] });
-  assert.match(formatMissAlert(miss, 0), /Turn cost \$1\.00\. Preceding: none observed\. Pre-transport logical request not observed\.$/);
+  assert.match(formatMissAlert(miss, 0), /Estimated usage cost \$1\.00; not a subscription charge\. Preceding: none observed\. Pre-transport logical request not observed\.$/);
 });

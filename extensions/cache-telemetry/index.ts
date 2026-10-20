@@ -16,6 +16,7 @@ export type CacheTurn = {
   classification: "hit" | "miss" | "cold" | "unknown"; sharpDrop: boolean;
   events: string[]; messageEntryId?: string; toolResults?: number; promptHash?: string; toolsHash?: string;
   providerPayload?: ProviderPayloadContinuity;
+  completedAt?: number; requestGapMs?: number; trimmedResults?: number;
 };
 type MeasuredTurn = Omit<CacheTurn, "classification" | "sharpDrop">;
 
@@ -23,9 +24,9 @@ type MeasuredTurn = Omit<CacheTurn, "classification" | "sharpDrop">;
 // read instead, priced from the turn's own per-token write and read costs.
 export function missPenalty(message: any): number {
   const usage = message?.usage;
-  if (!usage?.cacheWrite || !usage.cost?.cacheWrite) return 0;
+  if (!usage?.cacheWrite || !usage.cost?.cacheWrite || !usage.cacheRead || !usage.cost.cacheRead) return 0;
   const writeRate = usage.cost.cacheWrite / usage.cacheWrite;
-  const readRate = usage.cacheRead && usage.cost.cacheRead ? usage.cost.cacheRead / usage.cacheRead : writeRate / 12.5;
+  const readRate = usage.cost.cacheRead / usage.cacheRead;
   return Math.max(0, usage.cacheWrite * (writeRate - readRate));
 }
 
@@ -89,12 +90,12 @@ export function formatCacheStatus(turns: CacheTurn[]): string {
   const total = turns.reduce((sum, turn) => sum + turn.cost, 0);
   const missCost = misses.reduce((sum, turn) => sum + turn.cost, 0);
   const mark = last.classification === "miss" ? "✗ MISS" : last.classification === "hit" ? "✓" : last.classification;
-  return `cache ${mark} ${reuse}% · turn $${last.cost.toFixed(2)} · session $${total.toFixed(2)} · ${misses.length} misses $${missCost.toFixed(2)}`;
+  return `cache ${mark} ${reuse}% · est. turn $${last.cost.toFixed(2)} · session $${total.toFixed(2)} · ${misses.length} misses $${missCost.toFixed(2)}`;
 }
 
 export function formatMissAlert(turn: CacheTurn, penalty: number): string {
-  return `Cache miss: read ${tokens(turn.cacheRead)}, rewrote ${tokens(turn.cacheWrite)} of ${tokens(turn.input + turn.cacheRead + turn.cacheWrite)} tokens. ` +
-    `Turn cost $${turn.cost.toFixed(2)}${penalty > 0 ? ` (about $${penalty.toFixed(2)} more than a hit)` : ""}. ` +
+  return `Cache miss: read ${tokens(turn.cacheRead)}, uncached ${tokens(turn.input)}, wrote ${tokens(turn.cacheWrite)} of ${tokens(turn.input + turn.cacheRead + turn.cacheWrite)} input tokens. ` +
+    `Estimated usage cost $${turn.cost.toFixed(2)}${penalty > 0 ? ` (estimated cache-write premium $${penalty.toFixed(2)})` : ""}; not a subscription charge. ` +
     `Preceding: ${turn.events.join(", ") || "none observed"}. ${formatPayloadContinuity(turn.providerPayload)}`;
 }
 
@@ -130,7 +131,8 @@ export function readTurns(entries: readonly SessionEntry[]): CacheTurn[] {
     const message = entry.type === "message" ? entry.message : undefined;
     if (message?.role !== "assistant" || !message.usage) continue;
     const saved = diagnosticsByEntry.get(entry.id) ?? legacyDiagnostics.get(message.timestamp);
-    turns.push(classifyTurn({ ...measure(message), ...saved,
+    const recordedAt = Date.parse(entry.timestamp);
+    turns.push(classifyTurn({ ...measure(message), completedAt: Number.isFinite(recordedAt) ? recordedAt : undefined, ...saved,
       events: saved?.events ?? (events.length ? events : ["request diagnostics not recorded"]) }, turns.at(-1)));
     events = [];
   }
@@ -152,7 +154,7 @@ export function formatCacheSummary(turns: CacheTurn[], last = 5): string {
   const cost = (rows: CacheTurn[]) => rows.reduce((sum, turn) => sum + turn.cost, 0).toFixed(2);
   const measured = misses.length + hits.length;
   return [
-    `Cache (active branch): ${turns.length} turns; ${misses.length} misses; ${measured ? (100 * misses.length / measured).toFixed(1) : "0.0"}% miss rate (hits + misses).`,
+    `Cache (active branch; estimated usage costs, not subscription charges): ${turns.length} turns; ${misses.length} misses; ${measured ? (100 * misses.length / measured).toFixed(1) : "0.0"}% miss rate (hits + misses).`,
     `Cost: misses $${cost(misses)}; hits $${cost(hits)}; cold $${cost(cold)} (${cold.length}); unknown $${cost(unknown)} (${unknown.length}).`,
     "Hit: >=50% cached input. Miss: <50% reuse after a comparable turn, or >50% cache-read drop while input context grew. First/model-switch low reuse is cold. These are heuristics, not provider cache verdicts.",
     ...misses.slice(-last).map((turn) => `${new Date(turn.timestamp).toISOString()} ${turn.provider}/${turn.model}: read ${turn.cacheRead}, input ${turn.input}, write ${turn.cacheWrite}, total ${turn.totalTokens}, $${turn.cost.toFixed(2)}${turn.sharpDrop ? " [sharp drop]" : ""}; preceding: ${turn.events.join(", ") || "none observed"}; tool results ${turn.toolResults ?? "unknown"}. ${formatPayloadContinuity(turn.providerPayload)}`),
@@ -162,8 +164,16 @@ export function formatCacheSummary(turns: CacheTurn[], last = 5): string {
 export default function cacheTelemetry(pi: ExtensionAPI): void {
   let turns: CacheTurn[] = [];
   let events: string[] = [];
-  let request: Pick<CacheTurn, "toolResults" | "promptHash" | "toolsHash" | "providerPayload"> = {};
+  let request: Pick<CacheTurn, "toolResults" | "promptHash" | "toolsHash" | "providerPayload" | "requestGapMs" | "trimmedResults"> = {};
   let previousPayload: ProviderPayloadFingerprint | undefined;
+  let seenTrims = new Set<string>();
+  const observeTrims = (ctx: ExtensionContext) => {
+    for (const entry of ctx.sessionManager.getBranch()) {
+      if (entry.type !== "custom" || entry.customType !== "context-budget-omissions-v1" || seenTrims.has(entry.id)) continue;
+      seenTrims.add(entry.id);
+      if (Array.isArray(entry.data)) request.trimmedResults = (request.trimmedResults ?? 0) + entry.data.length;
+    }
+  };
   const showStatus = (ctx: ExtensionContext) => {
     if (!ctx.hasUI) return;
     const text = formatCacheStatus(turns);
@@ -175,6 +185,9 @@ export default function cacheTelemetry(pi: ExtensionAPI): void {
     events = [];
     request = {};
     previousPayload = undefined;
+    seenTrims = new Set(ctx.sessionManager.getBranch()
+      .filter((entry) => entry.type === "custom" && entry.customType === "context-budget-omissions-v1")
+      .map((entry) => entry.id));
     showStatus(ctx);
   };
   pi.on("session_start", restore);
@@ -186,8 +199,12 @@ export default function cacheTelemetry(pi: ExtensionAPI): void {
       toolResults: event.messages.filter((message) => message.role === "toolResult").length,
       promptHash: hash(ctx.getSystemPrompt()), toolsHash: hash(JSON.stringify(pi.getActiveTools())),
     };
+    const lastRecordedAt = turns.at(-1)?.completedAt;
+    if (lastRecordedAt !== undefined) request.requestGapMs = Math.max(0, Date.now() - lastRecordedAt);
+    observeTrims(ctx);
   });
-  pi.on("before_provider_request", (event) => {
+  pi.on("before_provider_request", (event, ctx) => {
+    observeTrims(ctx);
     const observed = inspectProviderPayload(event.payload, previousPayload);
     request = { ...request, providerPayload: observed?.continuity };
     previousPayload = observed?.fingerprint;
@@ -197,8 +214,12 @@ export default function cacheTelemetry(pi: ExtensionAPI): void {
     const previous = turns.at(-1);
     if (previous?.promptHash && request.promptHash !== previous.promptHash) events.push("system prompt changed");
     if (previous?.toolsHash && request.toolsHash !== previous.toolsHash) events.push("active tool order/set changed");
+    if (request.trimmedResults) events.push(`context-budget trimmed ${request.trimmedResults} results`);
+    if (request.requestGapMs !== undefined && request.requestGapMs >= 60000) {
+      events.push(`gap ${(request.requestGapMs / 60000).toFixed(1)} min since prior assistant record (cache expiry unverified)`);
+    }
     const turn = classifyTurn({ ...measure(event.message), ...request, messageEntryId: event.messageEntryId,
-      events: [...new Set(events)] }, previous);
+      completedAt: Date.now(), events: [...new Set(events)] }, previous);
     turns.push(turn);
     pi.appendEntry(ENTRY_TYPE, turn);
     events = [];

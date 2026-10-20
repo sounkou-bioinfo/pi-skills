@@ -25,6 +25,7 @@ npm install
 npm run check                  # full local gate, not the default for each edit
 npm run test:background-tasks   # registry + fake-Pi tool integration, real shell jobs
 npm run test:completions        # queue and fake-Pi lifecycle
+npm run test:cache-telemetry    # controlled-clock evidence, SDK hooks, Codex wire fixtures
 npm run test:rlm                # worker, subprocess, store, and system-R regressions
 npm run test:plannotator        # real SDK, headless review rejection and native tree return
 npm run test:plannotator:ui     # real Pi CLI + Chromium over an isolated private SSH tunnel
@@ -75,8 +76,12 @@ These tests may contact npm to provision isolated dependencies. Use
 `npm_config_offline=true` once the required packages are cached. Host loading uses
 an isolated HOME and agent directory with `PI_OFFLINE=1`; no real Claude login,
 model requests, or paid-service checks run. The upstream fixture suite uses local
-CLI/HTTP fixtures. Full agent-loop, interactive, lifecycle, and live subscription
-behavior remain separate coverage gaps.
+CLI/HTTP fixtures. The replay-boundary fixture forwards rewritten JSON through
+a loopback server, compares it with asynchronous payload-hook output, and checks
+marker budgeting and process reuse. Hook rejection and cancellation must prevent
+forwarding; HTTPS is blocked in the stream-level rejection fixture.
+Full agent-loop, interactive, lifecycle, and live subscription behavior remain
+separate coverage gaps.
 
 ## Optional fresh-Pi memory source smoke
 

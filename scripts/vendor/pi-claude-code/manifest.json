@@ -4,7 +4,8 @@
   "archiveSha256": "6e5edbcf16c6e6b3e233bbf9953c69152b5db6dd8ca324a8ad7fd16e9da1884b",
   "patches": [
     "0001-host-model-catalog.patch",
-    "0002-normalize-tool-call-ids.patch"
+    "0002-normalize-tool-call-ids.patch",
+    "0003-cache-request-boundary.patch"
   ],
   "overlays": [
     "UPSTREAM.md"

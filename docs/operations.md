@@ -47,6 +47,14 @@ charges. Inherited API-key, proxy, and cloud-provider overrides are rejected to
 avoid silently changing authentication or billing. Local fixtures verify
 packaging and protocol behavior, not live subscription eligibility or cost.
 
+The replay rewrite allocates at most four explicit cache markers: one tool
+boundary, one leading-system boundary, and up to two message boundaries.
+Nested tool arguments are not cache metadata. Pi's asynchronous payload hook
+runs after this rewrite and before forwarding to Claude; it can mutate or replace
+the JSON. Hook code must preserve provider-valid requests. A rejected hook or
+cancellation prevents forwarding. These boundaries have local CLI/HTTP tests;
+they do not establish provider cache hits or subscription quota savings.
+
 The snapshot is pinned and generated from a [manifest, patches, and overlay](../scripts/vendor/pi-claude-code/manifest.json).
 Updates are explicit maintenance operations; installation and reload do not
 fetch upstream source or apply patches.
@@ -314,10 +322,12 @@ and does not send a model request.
 
 In the interactive UI the footer shows the latest turn's reuse and cost, the
 session cost and the cost of misses so far, for example
-`cache ✓ 99% · turn $0.15 · session $812.40 · 221 misses $716.29`. A miss turns
-the line red and raises a warning with the tokens read and rewritten, the turn's
-cost, its estimated extra cost over a hit (cache-write minus cache-read price
-for the rewritten tokens), and the events observed before it.
+`cache ✓ 99% · est. turn $0.15 · session $812.40 · 221 misses $716.29`. A miss
+turns the line red and raises a warning with cached, uncached and cache-write
+input tokens and the events observed before it. Dollar values are usage-cost
+estimates, not subscription charges or quota measurements. When the provider
+reports both read and write prices, the warning estimates their rate difference
+for written tokens; it does not infer a missing read price or promise savings.
 
 Assistant messages already store usage; telemetry reuses that data and appends
 `cache-telemetry-v1` custom entries for request diagnostics. These entries do
@@ -329,6 +339,14 @@ field hashes with the preceding request. It persists only item counts, the
 common-prefix length, the first mismatch position, and changed top-level field
 names. Payload content is not retained; comparison hashes remain in memory and
 reset at session, tree, or model boundaries.
+
+Diagnostics include the elapsed gap from the preceding assistant record to the
+next request and the count of newly persisted context-budget omissions observed
+before sending. Existing branch receipts are history on reload; tool
+continuations do not count them again. A long gap is labeled `cache expiry
+unverified`, not a known cold cache. Neither elapsed time nor compaction proves
+that all cached prefixes are gone. The retained-text hard ceiling and
+half-budget retrim policy remain in force; time alone does not trigger trimming.
 
 A hit has at least 50% cached input (`input + cacheRead + cacheWrite`, excluding
 output). Low reuse after a comparable provider/model turn is a miss; a first or
@@ -354,7 +372,11 @@ user turn, and verifies full-context fallback after prompt/history changes or a
 connection reset. Set `PI_CACHE_HOST_DIR` to an installed
 `@earendil-works/pi-coding-agent` directory when testing that host's exact
 adapter. The test does not contact OpenAI or establish provider-side token reuse.
-Older turns retain usage but may lack these diagnostics.
+For Claude Code, the same hook runs on the replay-rewritten JSON at the relay
+boundary. Loopback tests compare callback output with the body actually received
+upstream, including process reuse, tool results, hook rejection, and cancellation.
+A later hook can still change the body; provider-side cache acceptance remains
+unmeasured. Older turns retain usage but may lack these diagnostics.
 
 For offline session replay on Node 24+, run:
 

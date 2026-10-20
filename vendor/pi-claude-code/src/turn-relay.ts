@@ -130,14 +130,14 @@ export class TurnRelay {
   private cancelled = false;
   private closed = false;
   private baseUrl?: string;
-  private transformRequest?: (body: Buffer) => Buffer;
+  private transformRequest?: (body: Buffer) => Buffer | Promise<Buffer>;
   private requestBetas: string[] = [];
 
   constructor(
     upstream = "https://api.anthropic.com",
     private readonly timeoutMs = 180_000,
     onEvent?: (event: AnthropicStreamEvent) => void,
-    transformRequest?: (body: Buffer) => Buffer,
+    transformRequest?: (body: Buffer) => Buffer | Promise<Buffer>,
     requestBetas: string[] = [],
   ) {
     this.upstream = new URL(upstream);
@@ -163,7 +163,7 @@ export class TurnRelay {
   /** Arm the persistent relay for one new Claude turn. */
   beginTurn(
     onEvent?: (event: AnthropicStreamEvent) => void,
-    transformRequest?: (body: Buffer) => Buffer,
+    transformRequest?: (body: Buffer) => Buffer | Promise<Buffer>,
     requestBetas: string[] = [],
   ): void {
     if (this.closed) throw new Error("Claude Code turn relay is closed");
@@ -259,8 +259,9 @@ export class TurnRelay {
     let upstreamRequest: http.ClientRequest | undefined;
     try {
       let body = await this.readBody(request);
+      if (this.cancelled) return;
       this.originalRequestBody = Buffer.from(body);
-      if (this.transformRequest) body = this.transformRequest(body);
+      if (this.transformRequest) body = await this.transformRequest(body);
       this.requestBody = Buffer.from(body);
       if (this.cancelled) return;
 
