@@ -51,9 +51,22 @@ The replay rewrite allocates at most four explicit cache markers: one tool
 boundary, one leading-system boundary, and up to two message boundaries.
 Nested tool arguments are not cache metadata. Pi's asynchronous payload hook
 runs after this rewrite and before forwarding to Claude; it can mutate or replace
-the JSON. Hook code must preserve provider-valid requests. A rejected hook or
-cancellation prevents forwarding. These boundaries have local CLI/HTTP tests;
-they do not establish provider cache hits or subscription quota savings.
+the JSON. Hook code must preserve provider-valid requests. Rejection of the
+provider's `onPayload` promise or cancellation prevents forwarding. Pi reports
+exceptions from individual `before_provider_request` listeners without
+necessarily rejecting that promise; a listener that must stop a request must
+also abort the agent. Local CLI/HTTP tests do not establish provider cache hits
+or subscription quota savings.
+
+Native environment/date reminders occupy their replay positions before the
+initial request is sent. Startup context attached to the first queried user
+message stays at that historical position, even with imported history. Replay
+carriers record the user ordinal and canonical-content hash along with the
+prefix; an edited or absent anchor does not receive stale context. This
+preserves native instructions rather than discarding them to improve cache
+statistics. Restoration requires recorded metadata and cannot reconstruct
+unrecorded native context. [Bounded Haiku verification](claude-cache-verification.md)
+records the live checks and their limits.
 
 The snapshot is pinned and generated from a [manifest, patches, and overlay](../scripts/vendor/pi-claude-code/manifest.json).
 Updates are explicit maintenance operations; installation and reload do not

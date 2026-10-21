@@ -78,10 +78,13 @@ an isolated HOME and agent directory with `PI_OFFLINE=1`; no real Claude login,
 model requests, or paid-service checks run. The upstream fixture suite uses local
 CLI/HTTP fixtures. The replay-boundary fixture forwards rewritten JSON through
 a loopback server, compares it with asynchronous payload-hook output, and checks
-marker budgeting and process reuse. Hook rejection and cancellation must prevent
-forwarding; HTTPS is blocked in the stream-level rejection fixture.
-Full agent-loop, interactive, lifecycle, and live subscription behavior remain
-separate coverage gaps.
+marker budgeting, initial reminder layout, startup-context anchoring, tool-worker
+replacement, and warm process reuse. Provider `onPayload` rejection and
+cancellation must prevent forwarding; HTTPS is blocked in the stream-level
+rejection fixture. Individual Pi event-listener exceptions are reported by the
+host and do not enforce cancellation; live-check request budgets must explicitly
+abort the agent. Full agent-loop, interactive, lifecycle, and live subscription
+behavior remain separate from this offline gate.
 
 ## Optional fresh-Pi memory source smoke
 

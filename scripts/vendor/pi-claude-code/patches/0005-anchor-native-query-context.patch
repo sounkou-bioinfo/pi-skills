@@ -1,0 +1,358 @@
+diff --git a/src/claude-cli.ts b/src/claude-cli.ts
+index 593913f..4d3b3f9 100644
+--- a/src/claude-cli.ts
++++ b/src/claude-cli.ts
+@@ -15,6 +15,7 @@ import type {
+   AnthropicStreamEvent,
+   NativeFrame,
+   NativeMessage,
++  NativeQueryPrefix,
+   NativeOutputEvent,
+   NativeResult,
+   NativeUsage,
+@@ -54,6 +55,8 @@ export interface RunClaudeInput {
+   initialUserPrefix?: unknown[];
+   /** Native system messages Claude Code injected immediately after that user message. */
+   initialSystemMessages?: unknown[];
++  /** Startup context anchored to the initial queried user message. */
++  initialQueryPrefix?: NativeQueryPrefix;
+   /** Pi system/tool deltas to restore at their historical assistant boundaries. */
+   nativeSystemInjections?: NativeSystemInjection[];
+   /** Beta features appended to Claude Code's own request header by the turn relay. */
+@@ -77,6 +80,7 @@ export interface RunClaudeOutput {
+   };
+   initialUserPrefix?: unknown[];
+   initialSystemMessages?: unknown[];
++  initialQueryPrefix?: NativeQueryPrefix;
+   /** Latest plan-limit status Claude Code reported for this turn. */
+   rateLimit?: RateLimitInfo;
+ }
+@@ -490,9 +494,9 @@ function requestMessages(body: Buffer | undefined): NativeRequestMessage[] | und
+   }
+ }
+ 
+-function deriveInitialUserPrefix(body: Buffer | undefined, canonicalContent: unknown[]): unknown[] | undefined {
++function deriveInitialUserPrefix(body: Buffer | undefined, canonicalContent: unknown[], userIndex = 0): unknown[] | undefined {
+   if (canonicalContent.length === 0) return undefined;
+-  const actual = requestMessages(body)?.[0];
++  const actual = requestMessages(body)?.filter((message) => message.role === "user")[userIndex];
+   if (actual?.role !== "user" || !Array.isArray(actual.content) || actual.content.length < canonicalContent.length) {
+     return undefined;
+   }
+@@ -517,6 +521,16 @@ function deriveInitialSystemMessages(body: Buffer | undefined): unknown[] | unde
+   return systems.length ? structuredClone(systems) : undefined;
+ }
+ 
++function deriveInitialQueryPrefix(body: Buffer | undefined, frames: NativeFrame[]): NativeQueryPrefix | undefined {
++  const userIndex = (requestMessages(body)?.filter((message) => message.role === "user").length ?? 0) - 1;
++  const canonical = frames.findLast((frame) => frame.type === "user")?.message.content;
++  if (userIndex < 1 || !canonical) return undefined;
++  const prefix = deriveInitialUserPrefix(body, canonical, userIndex);
++  if (!prefix?.length) return undefined;
++  return { userIndex, prefix,
++    canonicalHash: createHash("sha256").update(canonicalJson(withoutCacheControl(canonical))).digest("hex") };
++}
++
+ function contentText(content: unknown): string {
+   if (typeof content === "string") return content;
+   if (!Array.isArray(content)) return "";
+@@ -637,8 +651,9 @@ export function rewriteInitialRequest(
+   body: Buffer,
+   prefix: unknown[] | undefined,
+   canonicalContent: unknown[],
+-  initialSystemMessages: unknown[] | undefined,
++  initialSystemMessages?: unknown[],
+   nativeSystemInjections?: NativeSystemInjection[],
++  initialQueryPrefix?: NativeQueryPrefix,
+ ): Buffer {
+   const payload = JSON.parse(body.toString("utf8")) as {
+     messages?: NativeRequestMessage[];
+@@ -671,6 +686,21 @@ export function rewriteInitialRequest(
+     removeRepeatedUserReminders(messages, prefix);
+   }
+ 
++  if (messages && initialQueryPrefix) {
++    const target = messages.filter((message) => message.role === "user")[initialQueryPrefix.userIndex];
++    if (target && Array.isArray(target.content)) {
++      const { prefix: queryPrefix, canonicalHash } = initialQueryPrefix;
++      const leading = target.content.slice(0, queryPrefix.length);
++      const canonical = canonicalJson(withoutCacheControl(leading)) === canonicalJson(withoutCacheControl(queryPrefix))
++        ? target.content.slice(queryPrefix.length) : target.content;
++      if (createHash("sha256").update(canonicalJson(withoutCacheControl(canonical))).digest("hex") === canonicalHash) {
++        const restored = [...structuredClone(queryPrefix), ...structuredClone(canonical)];
++        removeRepeatedUserReminders(messages, queryPrefix);
++        target.content = restored;
++      }
++    }
++  }
++
+   if (nativeSystemInjections) {
+     messages = injectNativeSystemMessages(messages!, nativeSystemInjections);
+     payload.messages = messages;
+@@ -918,6 +948,7 @@ class ClaudeProcess {
+           canonicalInitialUser,
+           input.initialSystemMessages,
+           input.nativeSystemInjections,
++          input.initialQueryPrefix,
+         );
+         if (!input.onPayload) return rewritten;
+         const payload: unknown = JSON.parse(rewritten.toString("utf8"));
+@@ -1036,6 +1067,8 @@ class ClaudeProcess {
+           input.initialUserPrefix ?? deriveInitialUserPrefix(this.relay.originalRequestBody, canonicalInitialUser),
+         initialSystemMessages:
+           input.initialSystemMessages ?? deriveInitialSystemMessages(this.relay.originalRequestBody),
++        initialQueryPrefix:
++          input.initialQueryPrefix ?? deriveInitialQueryPrefix(this.relay.requestBody, input.frames),
+         rateLimit,
+       };
+     } finally {
+diff --git a/src/native-types.ts b/src/native-types.ts
+index bcf0c91..d0f2d4e 100644
+--- a/src/native-types.ts
++++ b/src/native-types.ts
+@@ -32,6 +32,12 @@ export type NativeContentBlock =
+   | { type: "redacted_thinking"; data: string; [key: string]: unknown }
+   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown>; [key: string]: unknown };
+ 
++export interface NativeQueryPrefix {
++  userIndex: number;
++  canonicalHash: string;
++  prefix: unknown[];
++}
++
+ export interface NativeFrame {
+   type: "user" | "assistant";
+   message: {
+diff --git a/src/stream.ts b/src/stream.ts
+index 0932541..8dcff31 100644
+--- a/src/stream.ts
++++ b/src/stream.ts
+@@ -18,11 +18,12 @@ import {
+ import { describeUsageCreditsRejection } from "./billing.ts";
+ import { runClaudeRequest } from "./claude-cli.ts";
+ import { nativeModel, supportsNativeToolChanges } from "./model-catalog.ts";
+-import type { AnthropicStreamEvent, NativeContentBlock, NativeMessage, NativeUsage } from "./native-types.ts";
++import type { AnthropicStreamEvent, NativeContentBlock, NativeMessage, NativeQueryPrefix, NativeUsage } from "./native-types.ts";
+ import {
+   buildExtraBody,
+   getInitialSystemMessages,
+   getInitialUserPrefix,
++  getInitialQueryPrefix,
+   makeReplayDiagnostic,
+   NATIVE_TOOL_CHANGES_BETA,
+   prepareFrames,
+@@ -194,6 +195,7 @@ class EventTranslator {
+     usage: NativeUsage,
+     initialUserPrefix?: unknown[],
+     initialSystemMessages?: unknown[],
++    initialQueryPrefix?: NativeQueryPrefix,
+   ): void {
+     const authoritative = nativeContent(message.content, this.toolNames);
+     if (!this.sawContentEvent) {
+@@ -210,7 +212,7 @@ class EventTranslator {
+     this.output.errorMessage = mapped.errorMessage;
+     this.output.diagnostics = [
+       ...(this.output.diagnostics ?? []),
+-      makeReplayDiagnostic(message, this.output, initialUserPrefix, initialSystemMessages) as never,
++      makeReplayDiagnostic(message, this.output, initialUserPrefix, initialSystemMessages, initialQueryPrefix) as never,
+     ];
+   }
+ 
+@@ -362,6 +364,7 @@ export function streamClaudeCode(
+       const frames = prepareFrames(transcript.messages);
+       const initialUserPrefix = getInitialUserPrefix(transcript.messages);
+       const initialSystemMessages = getInitialSystemMessages(transcript.messages);
++      const initialQueryPrefix = getInitialQueryPrefix(transcript.messages);
+       const preparedTools = prepareTools(tools);
+       const extraBody = buildExtraBody(
+         model.id,
+@@ -384,6 +387,7 @@ export function streamClaudeCode(
+         env: options?.env,
+         initialUserPrefix,
+         initialSystemMessages,
++        initialQueryPrefix,
+         nativeSystemInjections: nativeTranscript?.systemInjections,
+         betas: nativeTranscript ? [NATIVE_TOOL_CHANGES_BETA] : undefined,
+         sessionId: options?.cacheRetention === "none" ? undefined : options?.sessionId,
+@@ -395,6 +399,7 @@ export function streamClaudeCode(
+         response.usage,
+         response.initialUserPrefix,
+         response.initialSystemMessages,
++        response.initialQueryPrefix,
+       );
+       output.providerThinkingLevel = options?.reasoning;
+       output.diagnostics = [
+diff --git a/src/transcript.ts b/src/transcript.ts
+index b3bd95e..01dd8ae 100644
+--- a/src/transcript.ts
++++ b/src/transcript.ts
+@@ -14,7 +14,7 @@ import {
+   type ToolResultMessage,
+ } from "@earendil-works/pi-ai";
+ import { supportsAdaptiveThinking } from "./model-catalog.ts";
+-import type { NativeContentBlock, NativeFrame, NativeMessage } from "./native-types.ts";
++import type { NativeContentBlock, NativeFrame, NativeMessage, NativeQueryPrefix } from "./native-types.ts";
+ 
+ export const TOOL_PREFIX = "mcp__pi__";
+ export const NATIVE_REPLAY_DIAGNOSTIC = "claude-code.native-assistant.v1";
+@@ -44,6 +44,7 @@ interface ReplayCarrier {
+   projection: AssistantProjection;
+   initialUserPrefix?: unknown[];
+   initialSystemMessages?: unknown[];
++  initialQueryPrefix?: NativeQueryPrefix;
+ }
+ 
+ interface AssistantProjection {
+@@ -83,11 +84,18 @@ function replayCarrier(message: AssistantMessage): ReplayCarrier | undefined {
+   return isReplayCarrier(candidate) ? candidate : undefined;
+ }
+ 
+-function replayMetadata(messages: Message[], key: "initialUserPrefix" | "initialSystemMessages"): unknown[] | undefined {
++function replayMetadata<Key extends "initialUserPrefix" | "initialSystemMessages" | "initialQueryPrefix">(
++  messages: Message[], key: Key,
++): ReplayCarrier[Key] {
+   for (let index = messages.length - 1; index >= 0; index--) {
+     const message = messages[index];
+     if (message?.role !== "assistant") continue;
+     const value = replayCarrier(message)?.[key];
++    if (key === "initialQueryPrefix" && value) {
++      const query = value as NativeQueryPrefix;
++      if (!Number.isInteger(query.userIndex) || query.userIndex < 1 || typeof query.canonicalHash !== "string"
++        || !/^[a-f0-9]{64}$/u.test(query.canonicalHash) || !Array.isArray(query.prefix)) continue;
++    }
+     if (value) return clone(value);
+   }
+   return undefined;
+@@ -101,6 +109,10 @@ export function getInitialSystemMessages(messages: Message[]): unknown[] | undef
+   return replayMetadata(messages, "initialSystemMessages");
+ }
+ 
++export function getInitialQueryPrefix(messages: Message[]): NativeQueryPrefix | undefined {
++  return replayMetadata(messages, "initialQueryPrefix");
++}
++
+ function projectionsEqual(left: AssistantProjection, right: AssistantProjection): boolean {
+   return JSON.stringify(left) === JSON.stringify(right);
+ }
+@@ -395,6 +407,7 @@ export function makeReplayDiagnostic(
+   output: AssistantMessage,
+   initialUserPrefix?: unknown[],
+   initialSystemMessages?: unknown[],
++  initialQueryPrefix?: NativeQueryPrefix,
+ ) {
+   return {
+     type: NATIVE_REPLAY_DIAGNOSTIC,
+@@ -406,6 +419,7 @@ export function makeReplayDiagnostic(
+         projection: assistantProjection(output),
+         ...(initialUserPrefix ? { initialUserPrefix: clone(initialUserPrefix) } : {}),
+         ...(initialSystemMessages ? { initialSystemMessages: clone(initialSystemMessages) } : {}),
++        ...(initialQueryPrefix ? { initialQueryPrefix: clone(initialQueryPrefix) } : {}),
+       },
+     },
+   };
+diff --git a/tests/claude-cli.test.ts b/tests/claude-cli.test.ts
+index 10e1832..c36ab5e 100644
+--- a/tests/claude-cli.test.ts
++++ b/tests/claude-cli.test.ts
+@@ -1,4 +1,5 @@
+ import assert from "node:assert/strict";
++import { createHash } from "node:crypto";
+ import * as http from "node:http";
+ import https from "node:https";
+ import { syncBuiltinESMExports } from "node:module";
+@@ -132,6 +133,25 @@ test("snapshot cleanup preserves distinct trailing system messages", () => {
+   assert.equal(rewritten.messages.at(-1).content[0].text, tail.content);
+ });
+ 
++test("query prefixes remain at their anchor and do not restore edited or missing user content", () => {
++  const canonical = [{ text: "current", type: "text" }];
++  const prefix = [{ type: "text", text: "<system-reminder>Native startup context</system-reminder>" }];
++  const query = { userIndex: 1, prefix,
++    canonicalHash: createHash("sha256").update(JSON.stringify(canonical)).digest("hex") };
++  const original = { role: "user", content: [{ type: "text", text: "history" }] };
++  for (const content of [canonical, [{ type: "text", text: "edited" }]]) {
++    const body = Buffer.from(JSON.stringify({ messages: [original,
++      { role: "assistant", content: [{ type: "text", text: "past" }] }, { role: "user", content }] }));
++    const restored = JSON.parse(rewriteInitialRequest(body, [], original.content, [], [], query).toString());
++    assert.equal(restored.messages[0].content[0].text, "history");
++    assert.equal(restored.messages.at(-1).content.length, content === canonical ? 2 : 1);
++    assert.equal(restored.messages.at(-1).content.at(-1).text, content[0].text);
++    assert.deepEqual(rewriteInitialRequest(Buffer.from(JSON.stringify(restored)), [], original.content, [], [], query), Buffer.from(JSON.stringify(restored)));
++  }
++  const missing = JSON.parse(rewriteInitialRequest(Buffer.from(JSON.stringify({ messages: [original] })), [], original.content, [], [], query).toString());
++  assert.equal(missing.messages[0].content.length, 1);
++});
++
+ test("injects native system history at assistant boundaries", () => {
+   const body = {
+     system: [
+@@ -266,6 +286,7 @@ if (process.argv.includes('auth')) {
+ const settings = JSON.parse(readFileSync(process.argv[process.argv.indexOf('--settings') + 1], 'utf8'));
+ const extra = JSON.parse(settings.env.CLAUDE_CODE_EXTRA_BODY);
+ const history = [];
++let queries = 0;
+ const marker = { type: 'ephemeral', ttl: '1h' };
+ for await (const line of readline.createInterface({ input: process.stdin })) {
+   const frame = JSON.parse(line);
+@@ -282,6 +303,12 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
+     messages: [history[0], { role: 'system', content: 'Environment' }, ...history.slice(1),
+       { role: 'system', content: [{ type: 'text', text: "Today's date is 2026-10-20." }] }] };
+   history.at(-1).content.at(-1).cache_control = marker;
++  if (queries++ === 0) {
++    const current = body.messages.findLast((message) => message.role === 'user');
++    const reminder = '<system-reminder>Native startup context</system-reminder>';
++    if (current.content[0].type === 'tool_result') current.content[0].content += '\\n' + reminder;
++    else current.content.unshift({ type: 'text', text: reminder });
++  }
+   const response = await fetch(process.env.ANTHROPIC_BASE_URL + '/v1/messages', { method: 'POST', body: JSON.stringify(body) });
+   await response.text();
+   const toolTurn = response.headers.get('x-fixture-tool-turn') === 'true';
+@@ -318,12 +345,15 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
+       observed.push(structuredClone(body));
+     } });
+     assert.equal(first.relay.upstreamRequests, 1);
++    assert.equal(first.initialQueryPrefix?.userIndex, 2);
++    assert.deepEqual(first.initialQueryPrefix?.prefix, [{ type: "text", text: "<system-reminder>Native startup context</system-reminder>" }]);
+     assert.deepEqual(received, observed);
+     assert.equal(cachedClaudeProcessCount(), 0, "a native inert tool result cannot be retained");
+     const followup = [...frames, { type: "assistant", message: { role: "assistant", content: first.message.content } },
+       { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t2", content: "real result" }] } }]
+       .map((frame, index, all) => index < all.length - 1 ? { ...frame, shouldQuery: false as const } : frame);
+-    const snapshot = { initialUserPrefix: first.initialUserPrefix, initialSystemMessages: first.initialSystemMessages };
++    const snapshot = { initialUserPrefix: first.initialUserPrefix, initialSystemMessages: first.initialSystemMessages,
++      initialQueryPrefix: first.initialQueryPrefix };
+     const second = await runClaudeRequest({ ...input, ...snapshot, frames: followup as any, onPayload: async (payload) => {
+       const replacement = { ...(payload as any), metadata: { user_id: "replaced" } };
+       observed.push(structuredClone(replacement));
+diff --git a/tests/transcript.test.ts b/tests/transcript.test.ts
+index 8c12dc4..59ee271 100644
+--- a/tests/transcript.test.ts
++++ b/tests/transcript.test.ts
+@@ -5,6 +5,7 @@ import {
+   buildExtraBody,
+   getInitialSystemMessages,
+   getInitialUserPrefix,
++  getInitialQueryPrefix,
+   makeReplayDiagnostic,
+   normalizeInputSchema,
+   prepareFrames,
+@@ -127,7 +128,18 @@ test("replays native signed blocks only while the visible projection is unchange
+   };
+   const nativePrefix = [{ type: "text", text: "<system-reminder>stable</system-reminder>" }];
+   const nativeSystems = [{ role: "system", content: [{ type: "text", text: "environment" }] }];
+-  assistant.diagnostics = [makeReplayDiagnostic(native, assistant, nativePrefix, nativeSystems) as never];
++  const queryPrefix = { userIndex: 2, canonicalHash: "a".repeat(64), prefix: nativePrefix };
++  assistant.diagnostics = [makeReplayDiagnostic(native, assistant, nativePrefix, nativeSystems, queryPrefix) as never];
++  const restored = JSON.parse(JSON.stringify(assistant));
++  assert.deepEqual(getInitialQueryPrefix([restored]), queryPrefix);
++  getInitialQueryPrefix([restored])!.prefix.push({ type: "text", text: "local mutation" });
++  assert.deepEqual(getInitialQueryPrefix([restored]), queryPrefix);
++  for (const invalid of [{ ...queryPrefix, userIndex: -1 }, { ...queryPrefix, prefix: "bad" }, { ...queryPrefix, canonicalHash: "bad" }]) {
++    restored.diagnostics[0].details.carrier.initialQueryPrefix = invalid;
++    assert.equal(getInitialQueryPrefix([restored]), undefined);
++  }
++  delete restored.diagnostics[0].details.carrier.initialQueryPrefix;
++  assert.equal(getInitialQueryPrefix([restored]), undefined);
+ 
+   assert.deepEqual(getInitialUserPrefix([assistant]), nativePrefix);
+   assert.deepEqual(getInitialSystemMessages([assistant]), nativeSystems);

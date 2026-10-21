@@ -15,6 +15,7 @@ import type {
   AnthropicStreamEvent,
   NativeFrame,
   NativeMessage,
+  NativeQueryPrefix,
   NativeOutputEvent,
   NativeResult,
   NativeUsage,
@@ -54,6 +55,8 @@ export interface RunClaudeInput {
   initialUserPrefix?: unknown[];
   /** Native system messages Claude Code injected immediately after that user message. */
   initialSystemMessages?: unknown[];
+  /** Startup context anchored to the initial queried user message. */
+  initialQueryPrefix?: NativeQueryPrefix;
   /** Pi system/tool deltas to restore at their historical assistant boundaries. */
   nativeSystemInjections?: NativeSystemInjection[];
   /** Beta features appended to Claude Code's own request header by the turn relay. */
@@ -77,6 +80,7 @@ export interface RunClaudeOutput {
   };
   initialUserPrefix?: unknown[];
   initialSystemMessages?: unknown[];
+  initialQueryPrefix?: NativeQueryPrefix;
   /** Latest plan-limit status Claude Code reported for this turn. */
   rateLimit?: RateLimitInfo;
 }
@@ -490,9 +494,9 @@ function requestMessages(body: Buffer | undefined): NativeRequestMessage[] | und
   }
 }
 
-function deriveInitialUserPrefix(body: Buffer | undefined, canonicalContent: unknown[]): unknown[] | undefined {
+function deriveInitialUserPrefix(body: Buffer | undefined, canonicalContent: unknown[], userIndex = 0): unknown[] | undefined {
   if (canonicalContent.length === 0) return undefined;
-  const actual = requestMessages(body)?.[0];
+  const actual = requestMessages(body)?.filter((message) => message.role === "user")[userIndex];
   if (actual?.role !== "user" || !Array.isArray(actual.content) || actual.content.length < canonicalContent.length) {
     return undefined;
   }
@@ -515,6 +519,16 @@ function deriveInitialSystemMessages(body: Buffer | undefined): unknown[] | unde
   while (trailingStart > end && messages[trailingStart - 1]?.role === "system") trailingStart -= 1;
   if (trailingStart < messages.length) systems.push(...messages.slice(trailingStart));
   return systems.length ? structuredClone(systems) : undefined;
+}
+
+function deriveInitialQueryPrefix(body: Buffer | undefined, frames: NativeFrame[]): NativeQueryPrefix | undefined {
+  const userIndex = (requestMessages(body)?.filter((message) => message.role === "user").length ?? 0) - 1;
+  const canonical = frames.findLast((frame) => frame.type === "user")?.message.content;
+  if (userIndex < 1 || !canonical) return undefined;
+  const prefix = deriveInitialUserPrefix(body, canonical, userIndex);
+  if (!prefix?.length) return undefined;
+  return { userIndex, prefix,
+    canonicalHash: createHash("sha256").update(canonicalJson(withoutCacheControl(canonical))).digest("hex") };
 }
 
 function contentText(content: unknown): string {
@@ -637,8 +651,9 @@ export function rewriteInitialRequest(
   body: Buffer,
   prefix: unknown[] | undefined,
   canonicalContent: unknown[],
-  initialSystemMessages: unknown[] | undefined,
+  initialSystemMessages?: unknown[],
   nativeSystemInjections?: NativeSystemInjection[],
+  initialQueryPrefix?: NativeQueryPrefix,
 ): Buffer {
   const payload = JSON.parse(body.toString("utf8")) as {
     messages?: NativeRequestMessage[];
@@ -653,6 +668,8 @@ export function rewriteInitialRequest(
   }
   if (prefix) first.content = [...structuredClone(prefix), ...structuredClone(canonicalContent)];
 
+  // Establish the replay layout before the first request creates a cached prefix.
+  initialSystemMessages ??= deriveInitialSystemMessages(body);
   if (initialSystemMessages?.length && messages) {
     let systemEnd = 1;
     while (messages[systemEnd]?.role === "system") systemEnd += 1;
@@ -661,12 +678,27 @@ export function rewriteInitialRequest(
     const initialText = initialSystemMessages
       .map((message) => contentText((message as NativeRequestMessage).content))
       .join("\n");
-    while (messages.at(-1)?.role === "system") {
+    while (messages.length > initialSystemMessages.length + 1 && messages.at(-1)?.role === "system") {
       const trailingText = contentText(messages.at(-1)?.content);
-      if (!trailingText || !initialText.includes(trailingText)) break;
+      if (!trailingText || !`\n${initialText}\n`.includes(`\n${trailingText}\n`)) break;
       messages.pop();
     }
     removeRepeatedUserReminders(messages, prefix);
+  }
+
+  if (messages && initialQueryPrefix) {
+    const target = messages.filter((message) => message.role === "user")[initialQueryPrefix.userIndex];
+    if (target && Array.isArray(target.content)) {
+      const { prefix: queryPrefix, canonicalHash } = initialQueryPrefix;
+      const leading = target.content.slice(0, queryPrefix.length);
+      const canonical = canonicalJson(withoutCacheControl(leading)) === canonicalJson(withoutCacheControl(queryPrefix))
+        ? target.content.slice(queryPrefix.length) : target.content;
+      if (createHash("sha256").update(canonicalJson(withoutCacheControl(canonical))).digest("hex") === canonicalHash) {
+        const restored = [...structuredClone(queryPrefix), ...structuredClone(canonical)];
+        removeRepeatedUserReminders(messages, queryPrefix);
+        target.content = restored;
+      }
+    }
   }
 
   if (nativeSystemInjections) {
@@ -916,6 +948,7 @@ class ClaudeProcess {
           canonicalInitialUser,
           input.initialSystemMessages,
           input.nativeSystemInjections,
+          input.initialQueryPrefix,
         );
         if (!input.onPayload) return rewritten;
         const payload: unknown = JSON.parse(rewritten.toString("utf8"));
@@ -1034,6 +1067,8 @@ class ClaudeProcess {
           input.initialUserPrefix ?? deriveInitialUserPrefix(this.relay.originalRequestBody, canonicalInitialUser),
         initialSystemMessages:
           input.initialSystemMessages ?? deriveInitialSystemMessages(this.relay.originalRequestBody),
+        initialQueryPrefix:
+          input.initialQueryPrefix ?? deriveInitialQueryPrefix(this.relay.requestBody, input.frames),
         rateLimit,
       };
     } finally {

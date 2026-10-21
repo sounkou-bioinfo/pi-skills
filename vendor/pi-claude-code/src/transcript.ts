@@ -14,7 +14,7 @@ import {
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import { supportsAdaptiveThinking } from "./model-catalog.ts";
-import type { NativeContentBlock, NativeFrame, NativeMessage } from "./native-types.ts";
+import type { NativeContentBlock, NativeFrame, NativeMessage, NativeQueryPrefix } from "./native-types.ts";
 
 export const TOOL_PREFIX = "mcp__pi__";
 export const NATIVE_REPLAY_DIAGNOSTIC = "claude-code.native-assistant.v1";
@@ -44,6 +44,7 @@ interface ReplayCarrier {
   projection: AssistantProjection;
   initialUserPrefix?: unknown[];
   initialSystemMessages?: unknown[];
+  initialQueryPrefix?: NativeQueryPrefix;
 }
 
 interface AssistantProjection {
@@ -83,11 +84,18 @@ function replayCarrier(message: AssistantMessage): ReplayCarrier | undefined {
   return isReplayCarrier(candidate) ? candidate : undefined;
 }
 
-function replayMetadata(messages: Message[], key: "initialUserPrefix" | "initialSystemMessages"): unknown[] | undefined {
+function replayMetadata<Key extends "initialUserPrefix" | "initialSystemMessages" | "initialQueryPrefix">(
+  messages: Message[], key: Key,
+): ReplayCarrier[Key] {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (message?.role !== "assistant") continue;
     const value = replayCarrier(message)?.[key];
+    if (key === "initialQueryPrefix" && value) {
+      const query = value as NativeQueryPrefix;
+      if (!Number.isInteger(query.userIndex) || query.userIndex < 1 || typeof query.canonicalHash !== "string"
+        || !/^[a-f0-9]{64}$/u.test(query.canonicalHash) || !Array.isArray(query.prefix)) continue;
+    }
     if (value) return clone(value);
   }
   return undefined;
@@ -99,6 +107,10 @@ export function getInitialUserPrefix(messages: Message[]): unknown[] | undefined
 
 export function getInitialSystemMessages(messages: Message[]): unknown[] | undefined {
   return replayMetadata(messages, "initialSystemMessages");
+}
+
+export function getInitialQueryPrefix(messages: Message[]): NativeQueryPrefix | undefined {
+  return replayMetadata(messages, "initialQueryPrefix");
 }
 
 function projectionsEqual(left: AssistantProjection, right: AssistantProjection): boolean {
@@ -395,6 +407,7 @@ export function makeReplayDiagnostic(
   output: AssistantMessage,
   initialUserPrefix?: unknown[],
   initialSystemMessages?: unknown[],
+  initialQueryPrefix?: NativeQueryPrefix,
 ) {
   return {
     type: NATIVE_REPLAY_DIAGNOSTIC,
@@ -406,6 +419,7 @@ export function makeReplayDiagnostic(
         projection: assistantProjection(output),
         ...(initialUserPrefix ? { initialUserPrefix: clone(initialUserPrefix) } : {}),
         ...(initialSystemMessages ? { initialSystemMessages: clone(initialSystemMessages) } : {}),
+        ...(initialQueryPrefix ? { initialQueryPrefix: clone(initialQueryPrefix) } : {}),
       },
     },
   };

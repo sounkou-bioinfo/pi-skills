@@ -32,6 +32,20 @@ hook before forwarding; hook rejection or cancellation prevents forwarding.
 Loopback CLI/HTTP fixtures cover the composed request, process reuse, and hook
 mutation/replacement without live subscription calls.
 
+[0004-stable-initial-reminders.patch](../../scripts/vendor/pi-claude-code/patches/0004-stable-initial-reminders.patch)
+places native environment/date reminders in their replay positions on the first
+request. Cleanup preserves the initial reminder block and matches complete text
+boundaries, including combined legacy snapshots. Fixtures compare message
+prefixes through tool-worker replacement, warm continuation, and the loopback
+HTTP boundary independently of cache-marker movement.
+
+[0005-anchor-native-query-context.patch](../../scripts/vendor/pi-claude-code/patches/0005-anchor-native-query-context.patch)
+preserves native startup context on the user message that first triggered
+inference. Replay carriers store its user ordinal, canonical-content hash, and
+prefix blocks. Restoration requires the anchor to match; repeated copies are
+removed from later requests. Native instructions retain their historical
+position, and edited or absent anchors do not receive stale context.
+
 This provenance file comes from the [overlay](../../scripts/vendor/pi-claude-code/overlay/UPSTREAM.md).
 Edit the manifest, ordered patches, or overlay inputs, not generated files under
 `vendor/pi-claude-code/`. There are no install-time patches or downloads.

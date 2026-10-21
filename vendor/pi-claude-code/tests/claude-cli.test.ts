@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import * as http from "node:http";
 import https from "node:https";
 import { syncBuiltinESMExports } from "node:module";
@@ -90,6 +91,67 @@ test("stabilizes Claude Code's native replay reminders and cache breakpoint", ()
   );
 });
 
+test("initial native reminders keep their positions across handoff, tool replay, and user continuation", () => {
+  const firstUser = { role: "user", content: [{ type: "text", text: "inspect" }] };
+  const environment = { role: "system", content: "Environment", output_config: { effort: "low" } };
+  const date = { role: "system", content: [{ type: "text", text: "Today's date is 2026-10-20." }] };
+  const imported = [
+    { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "mcp__pi__read", input: { path: "a" } }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "file" }] },
+  ];
+  const stripMarkers = (messages: any[]) => messages.map((message) => ({
+    ...message,
+    content: Array.isArray(message.content) ? message.content.map(({ cache_control, ...block }: any) => block) : message.content,
+  }));
+  for (const history of [[], imported]) {
+    const body = Buffer.from(JSON.stringify({ messages: [firstUser, environment, ...history, date] }));
+    const first = rewriteInitialRequest(body, undefined, firstUser.content);
+    const expected = [firstUser, environment, date, ...history];
+    assert.deepEqual(stripMarkers(JSON.parse(first.toString()).messages), expected);
+    assert.deepEqual(rewriteInitialRequest(first, undefined, firstUser.content), first, "normalization is idempotent");
+    assert.deepEqual(rewriteInitialRequest(first, [], firstUser.content, [environment, date]), first,
+      "a restored snapshot preserves a user-only native bootstrap");
+
+    const continuation = [
+      { role: "assistant", content: [{ type: "text", text: "done" }] },
+      { role: "user", content: [{ type: "text", text: "next" }] },
+    ];
+    const native = Buffer.from(JSON.stringify({ messages: [firstUser, environment, ...history, ...continuation, date] }));
+    const next = rewriteInitialRequest(native, [], firstUser.content, [environment, date]);
+    assert.deepEqual(stripMarkers(JSON.parse(next.toString()).messages), [...expected, ...continuation]);
+    assert.equal(JSON.parse(body.toString()).messages.at(-1).content[0].text, date.content[0].text);
+  }
+});
+
+test("snapshot cleanup preserves distinct trailing system messages", () => {
+  const initial = { role: "system", content: "Environment includes boundary" };
+  const tail = { role: "system", content: "boundary" };
+  const firstUser = { role: "user", content: [{ type: "text", text: "inspect" }] };
+  const rewritten = JSON.parse(rewriteInitialRequest(Buffer.from(JSON.stringify({ messages: [firstUser, initial,
+    { role: "assistant", content: [{ type: "text", text: "done" }] }, tail] })), [], firstUser.content, [initial]).toString());
+  assert.equal(rewritten.messages.at(-1).role, "system");
+  assert.equal(rewritten.messages.at(-1).content[0].text, tail.content);
+});
+
+test("query prefixes remain at their anchor and do not restore edited or missing user content", () => {
+  const canonical = [{ text: "current", type: "text" }];
+  const prefix = [{ type: "text", text: "<system-reminder>Native startup context</system-reminder>" }];
+  const query = { userIndex: 1, prefix,
+    canonicalHash: createHash("sha256").update(JSON.stringify(canonical)).digest("hex") };
+  const original = { role: "user", content: [{ type: "text", text: "history" }] };
+  for (const content of [canonical, [{ type: "text", text: "edited" }]]) {
+    const body = Buffer.from(JSON.stringify({ messages: [original,
+      { role: "assistant", content: [{ type: "text", text: "past" }] }, { role: "user", content }] }));
+    const restored = JSON.parse(rewriteInitialRequest(body, [], original.content, [], [], query).toString());
+    assert.equal(restored.messages[0].content[0].text, "history");
+    assert.equal(restored.messages.at(-1).content.length, content === canonical ? 2 : 1);
+    assert.equal(restored.messages.at(-1).content.at(-1).text, content[0].text);
+    assert.deepEqual(rewriteInitialRequest(Buffer.from(JSON.stringify(restored)), [], original.content, [], [], query), Buffer.from(JSON.stringify(restored)));
+  }
+  const missing = JSON.parse(rewriteInitialRequest(Buffer.from(JSON.stringify({ messages: [original] })), [], original.content, [], [], query).toString());
+  assert.equal(missing.messages[0].content.length, 1);
+});
+
 test("injects native system history at assistant boundaries", () => {
   const body = {
     system: [
@@ -121,13 +183,13 @@ test("injects native system history at assistant boundaries", () => {
     "user",
     "system",
     "system",
+    "system",
     "assistant",
     "user",
     "system",
-    "system",
   ]);
   assert.equal(
-    ((rewritten.messages[2]?.content as Array<Record<string, unknown>>)[0] as Record<string, unknown>).type,
+    ((rewritten.messages[3]?.content as Array<Record<string, unknown>>)[0] as Record<string, unknown>).type,
     "tool_addition",
   );
   assert.equal(
@@ -171,10 +233,12 @@ test("replay budgets four protocol cache markers without changing nested tool da
     assert.equal(final.tools[1].cache_control, undefined);
     assert.equal(final.system[0].cache_control, undefined);
     assert.deepEqual(final.system[1].cache_control, marker);
-    assert.equal(final.messages[4].content[0].cache_control, undefined);
-    assert.deepEqual(final.messages[2].content[0].cache_control, marker);
-    assert.deepEqual(final.messages[5].content[0].cache_control, marker);
-    assert.equal(final.messages[1].content[0].input.cache_control, "application data");
+    const users = final.messages.filter((message: any) => message.role === "user");
+    assert.deepEqual(users.at(-2).content[0].cache_control, marker);
+    assert.equal(users.at(-1).content[0].type, "image");
+    assert.deepEqual(users.at(-1).content[0].cache_control, marker);
+    assert.equal(final.messages.find((message: any) => message.role === "system").content[0].cache_control, undefined);
+    assert.equal(final.messages.find((message: any) => message.role === "assistant").content[0].input.cache_control, "application data");
     assert.deepEqual(rewrite(once), once);
     final.cache_control = marker;
     final.system.unshift({ type: "text", text: "another system block", cache_control: marker });
@@ -187,7 +251,7 @@ test("replay budgets four protocol cache markers without changing nested tool da
   }
 });
 
-test("rewritten Claude requests cross async payload hooks and the loopback relay once per turn", async (t) => {
+test("native prefixes survive tool-worker replacement and warm continuation through payload hooks and the relay", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "pi-claude-payload-"));
   const command = join(root, "claude.mjs");
   const received: any[] = [];
@@ -196,15 +260,18 @@ test("rewritten Claude requests cross async payload hooks and the loopback relay
     for await (const chunk of request) body += chunk;
     received.push(JSON.parse(body));
     const usage = { input_tokens: 2, output_tokens: 1 };
+    const toolTurn = received.length === 1;
     const events = [
       { type: "message_start", message: { id: "reply", role: "assistant", content: [], usage } },
-      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "hello" } },
+      { type: "content_block_start", index: 0, content_block: toolTurn
+        ? { type: "tool_use", id: "t2", name: "mcp__pi__read", input: {} } : { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: toolTurn
+        ? { type: "input_json_delta", partial_json: '{"path":"b"}' } : { type: "text_delta", text: "hello" } },
       { type: "content_block_stop", index: 0 },
-      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage },
+      { type: "message_delta", delta: { stop_reason: toolTurn ? "tool_use" : "end_turn" }, usage },
       { type: "message_stop" },
     ];
-    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.writeHead(200, { "content-type": "text/event-stream", "x-fixture-tool-turn": String(toolTurn) });
     response.end(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
   });
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
@@ -219,6 +286,7 @@ if (process.argv.includes('auth')) {
 const settings = JSON.parse(readFileSync(process.argv[process.argv.indexOf('--settings') + 1], 'utf8'));
 const extra = JSON.parse(settings.env.CLAUDE_CODE_EXTRA_BODY);
 const history = [];
+let queries = 0;
 const marker = { type: 'ephemeral', ttl: '1h' };
 for await (const line of readline.createInterface({ input: process.stdin })) {
   const frame = JSON.parse(line);
@@ -232,15 +300,26 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     continue;
   }
   const body = { ...extra, system: [{ type: 'text', text: 'system', cache_control: marker }],
-    messages: [...history, { role: 'system', content: [{ type: 'text', text: 'tail' }] }] };
-  body.messages.at(-2).content.at(-1).cache_control = marker;
+    messages: [history[0], { role: 'system', content: 'Environment' }, ...history.slice(1),
+      { role: 'system', content: [{ type: 'text', text: "Today's date is 2026-10-20." }] }] };
+  history.at(-1).content.at(-1).cache_control = marker;
+  if (queries++ === 0) {
+    const current = body.messages.findLast((message) => message.role === 'user');
+    const reminder = '<system-reminder>Native startup context</system-reminder>';
+    if (current.content[0].type === 'tool_result') current.content[0].content += '\\n' + reminder;
+    else current.content.unshift({ type: 'text', text: reminder });
+  }
   const response = await fetch(process.env.ANTHROPIC_BASE_URL + '/v1/messages', { method: 'POST', body: JSON.stringify(body) });
   await response.text();
-  const message = { id: 'reply', role: 'assistant', content: [{ type: 'text', text: 'hello' }], stop_reason: 'end_turn', usage: { input_tokens: 2, output_tokens: 1 } };
+  const toolTurn = response.headers.get('x-fixture-tool-turn') === 'true';
+  const message = { id: 'reply', role: 'assistant', content: toolTurn
+    ? [{ type: 'tool_use', id: 't2', name: 'mcp__pi__read', input: { path: 'b' } }] : [{ type: 'text', text: 'hello' }],
+    stop_reason: toolTurn ? 'tool_use' : 'end_turn', usage: { input_tokens: 2, output_tokens: 1 } };
   history.push({ role: message.role, content: message.content });
+  if (toolTurn) history.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 't2', content: 'inert' }] });
   console.log(JSON.stringify({ type: 'stream_event', event: { type: 'message_stop' } }));
   console.log(JSON.stringify({ type: 'assistant', message }));
-  console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false }));
+  console.log(JSON.stringify({ type: 'result', subtype: toolTurn ? 'error_max_turns' : 'success', is_error: toolTurn }));
 }
 `, "utf8");
   await chmod(command, 0o755);
@@ -253,7 +332,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   ];
   const input = { model: "sonnet", systemPrompt: "system", frames, manifest: [],
     extraBody: { tools: [{ name: "mcp__pi__read", input_schema: { type: "object" }, cache_control: { type: "ephemeral", ttl: "1h" } }] },
-    nativeSystemInjections: [], toolNames: new Set<string>(), timeoutMs: 5000,
+    nativeSystemInjections: [], toolNames: new Set(["read"]), timeoutMs: 5000,
     env: { PI_CLAUDE_CODE_COMMAND: command }, upstreamUrl: `http://127.0.0.1:${address.port}`, sessionId: "payload-boundary" };
   const observed: any[] = [];
   try {
@@ -266,19 +345,36 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       observed.push(structuredClone(body));
     } });
     assert.equal(first.relay.upstreamRequests, 1);
+    assert.equal(first.initialQueryPrefix?.userIndex, 2);
+    assert.deepEqual(first.initialQueryPrefix?.prefix, [{ type: "text", text: "<system-reminder>Native startup context</system-reminder>" }]);
     assert.deepEqual(received, observed);
-    assert.equal(cachedClaudeProcessCount(), 1);
+    assert.equal(cachedClaudeProcessCount(), 0, "a native inert tool result cannot be retained");
     const followup = [...frames, { type: "assistant", message: { role: "assistant", content: first.message.content } },
-      { type: "user", message: { role: "user", content: [{ type: "text", text: "four" }] } }];
-    await runClaudeRequest({ ...input, frames: followup as any, onPayload: async (payload) => {
+      { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t2", content: "real result" }] } }]
+      .map((frame, index, all) => index < all.length - 1 ? { ...frame, shouldQuery: false as const } : frame);
+    const snapshot = { initialUserPrefix: first.initialUserPrefix, initialSystemMessages: first.initialSystemMessages,
+      initialQueryPrefix: first.initialQueryPrefix };
+    const second = await runClaudeRequest({ ...input, ...snapshot, frames: followup as any, onPayload: async (payload) => {
       const replacement = { ...(payload as any), metadata: { user_id: "replaced" } };
       observed.push(structuredClone(replacement));
       return replacement;
     } });
+    assert.equal(cachedClaudeProcessCount(), 1);
+    const nextUser = [...followup, { type: "assistant", message: { role: "assistant", content: second.message.content } },
+      { type: "user", message: { role: "user", content: [{ type: "text", text: "four" }] } }];
+    await runClaudeRequest({ ...input, ...snapshot, frames: nextUser as any, onPayload: (payload) => {
+      observed.push(structuredClone(payload));
+    } });
     assert.deepEqual(received, observed);
-    assert.equal(received.length, 2);
+    assert.equal(received.length, 3);
+    const messages = received.map((body) => body.messages.map((message: any) => ({ ...message,
+      content: Array.isArray(message.content) ? message.content.map(({ cache_control, ...block }: any) => block) : message.content,
+    })));
+    assert.deepEqual(messages[1].slice(0, messages[0].length), messages[0]);
+    assert.deepEqual(messages[2].slice(0, messages[1].length), messages[1]);
+    assert.equal(JSON.stringify(received).includes('"content":"inert"'), false);
     await assert.rejects(runClaudeRequest({ ...input, onPayload: () => { throw new Error("hook rejected"); } }));
-    assert.equal(received.length, 2);
+    assert.equal(received.length, 3);
 
     // Block HTTPS independently of the hook so a regression stays offline.
     let externalRequests = 0;
@@ -299,7 +395,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     assert.equal(hookCalls, 1);
     assert.equal(externalRequests, 0);
     assert.equal(result.stopReason, "error");
-    assert.equal(received.length, 2);
+    assert.equal(received.length, 3);
   } finally {
     t.mock.restoreAll();
     syncBuiltinESMExports();

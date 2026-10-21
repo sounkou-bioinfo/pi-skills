@@ -18,11 +18,12 @@ import {
 import { describeUsageCreditsRejection } from "./billing.ts";
 import { runClaudeRequest } from "./claude-cli.ts";
 import { nativeModel, supportsNativeToolChanges } from "./model-catalog.ts";
-import type { AnthropicStreamEvent, NativeContentBlock, NativeMessage, NativeUsage } from "./native-types.ts";
+import type { AnthropicStreamEvent, NativeContentBlock, NativeMessage, NativeQueryPrefix, NativeUsage } from "./native-types.ts";
 import {
   buildExtraBody,
   getInitialSystemMessages,
   getInitialUserPrefix,
+  getInitialQueryPrefix,
   makeReplayDiagnostic,
   NATIVE_TOOL_CHANGES_BETA,
   prepareFrames,
@@ -194,6 +195,7 @@ class EventTranslator {
     usage: NativeUsage,
     initialUserPrefix?: unknown[],
     initialSystemMessages?: unknown[],
+    initialQueryPrefix?: NativeQueryPrefix,
   ): void {
     const authoritative = nativeContent(message.content, this.toolNames);
     if (!this.sawContentEvent) {
@@ -210,7 +212,7 @@ class EventTranslator {
     this.output.errorMessage = mapped.errorMessage;
     this.output.diagnostics = [
       ...(this.output.diagnostics ?? []),
-      makeReplayDiagnostic(message, this.output, initialUserPrefix, initialSystemMessages) as never,
+      makeReplayDiagnostic(message, this.output, initialUserPrefix, initialSystemMessages, initialQueryPrefix) as never,
     ];
   }
 
@@ -362,6 +364,7 @@ export function streamClaudeCode(
       const frames = prepareFrames(transcript.messages);
       const initialUserPrefix = getInitialUserPrefix(transcript.messages);
       const initialSystemMessages = getInitialSystemMessages(transcript.messages);
+      const initialQueryPrefix = getInitialQueryPrefix(transcript.messages);
       const preparedTools = prepareTools(tools);
       const extraBody = buildExtraBody(
         model.id,
@@ -384,6 +387,7 @@ export function streamClaudeCode(
         env: options?.env,
         initialUserPrefix,
         initialSystemMessages,
+        initialQueryPrefix,
         nativeSystemInjections: nativeTranscript?.systemInjections,
         betas: nativeTranscript ? [NATIVE_TOOL_CHANGES_BETA] : undefined,
         sessionId: options?.cacheRetention === "none" ? undefined : options?.sessionId,
@@ -395,6 +399,7 @@ export function streamClaudeCode(
         response.usage,
         response.initialUserPrefix,
         response.initialSystemMessages,
+        response.initialQueryPrefix,
       );
       output.providerThinkingLevel = options?.reasoning;
       output.diagnostics = [

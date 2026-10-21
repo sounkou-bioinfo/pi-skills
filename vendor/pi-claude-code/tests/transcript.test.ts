@@ -5,6 +5,7 @@ import {
   buildExtraBody,
   getInitialSystemMessages,
   getInitialUserPrefix,
+  getInitialQueryPrefix,
   makeReplayDiagnostic,
   normalizeInputSchema,
   prepareFrames,
@@ -127,7 +128,18 @@ test("replays native signed blocks only while the visible projection is unchange
   };
   const nativePrefix = [{ type: "text", text: "<system-reminder>stable</system-reminder>" }];
   const nativeSystems = [{ role: "system", content: [{ type: "text", text: "environment" }] }];
-  assistant.diagnostics = [makeReplayDiagnostic(native, assistant, nativePrefix, nativeSystems) as never];
+  const queryPrefix = { userIndex: 2, canonicalHash: "a".repeat(64), prefix: nativePrefix };
+  assistant.diagnostics = [makeReplayDiagnostic(native, assistant, nativePrefix, nativeSystems, queryPrefix) as never];
+  const restored = JSON.parse(JSON.stringify(assistant));
+  assert.deepEqual(getInitialQueryPrefix([restored]), queryPrefix);
+  getInitialQueryPrefix([restored])!.prefix.push({ type: "text", text: "local mutation" });
+  assert.deepEqual(getInitialQueryPrefix([restored]), queryPrefix);
+  for (const invalid of [{ ...queryPrefix, userIndex: -1 }, { ...queryPrefix, prefix: "bad" }, { ...queryPrefix, canonicalHash: "bad" }]) {
+    restored.diagnostics[0].details.carrier.initialQueryPrefix = invalid;
+    assert.equal(getInitialQueryPrefix([restored]), undefined);
+  }
+  delete restored.diagnostics[0].details.carrier.initialQueryPrefix;
+  assert.equal(getInitialQueryPrefix([restored]), undefined);
 
   assert.deepEqual(getInitialUserPrefix([assistant]), nativePrefix);
   assert.deepEqual(getInitialSystemMessages([assistant]), nativeSystems);

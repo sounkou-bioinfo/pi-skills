@@ -32,6 +32,12 @@ export type NativeContentBlock =
   | { type: "redacted_thinking"; data: string; [key: string]: unknown }
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown>; [key: string]: unknown };
 
+export interface NativeQueryPrefix {
+  userIndex: number;
+  canonicalHash: string;
+  prefix: unknown[];
+}
+
 export interface NativeFrame {
   type: "user" | "assistant";
   message: {
