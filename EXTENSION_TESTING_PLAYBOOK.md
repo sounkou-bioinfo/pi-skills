@@ -184,11 +184,13 @@ and human-interface gaps.
   Separately confirm the actual VS Code Remote-SSH browser helper and private
   Ports-panel forwarding in the intended desktop client. Transport tests cannot
   certify that UI configuration or physical-phone usability.
-- [Expert discipline and architecture activation](scripts/expert-discipline.test.mjs):
+- [Expert discipline, architecture activation, and clarification](scripts/expert-discipline.test.mjs):
   `npm run test:expert-discipline` combines prompt-helper tests with real SDK sessions
   in a different temporary project, using an isolated offline scripted provider.
   It checks provider-visible nudges, available/absent skill discovery, explicit skill
-  invocation, and unchanged conversation messages. `scripts/memory-sdk.test.mjs`
+  invocation, and user-started and repeated background tool continuations.
+  Projection tests preserve stored history, unrelated sections, and tool declarations.
+  Unchanged policy sections need no projection repair. `scripts/memory-sdk.test.mjs`
   (part of `npm run test:memory`) uses the same offline provider pattern for the
   memory prompt section and projection; `PI_MEMORY_HOST_DIR` selects its host. Set `PI_EXPERT_HOST_DIR` to the
   host Pi package directory and `PI_EXPERT_SOURCE` to the source package to load.

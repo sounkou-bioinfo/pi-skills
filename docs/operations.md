@@ -169,17 +169,36 @@ event-driven checkpoints rather than per-commit ceremony, and local-only review
 and issue drafts unless publication is requested.
 
 The [expert-discipline hook](../extensions/expert-discipline/index.ts) supplies
-fixed decision-review instructions and an activation nudge as two named
-system-prompt sections. The nudge uses the available skill list and its file location, so
-Pi reads the skill proactively at relevant decision points in any project; keep
-both the hook and skill enabled. The full skill loads on demand. Decision guidance
-prefers short observe–act–inspect–revise cycles and distinct, evidence-producing
-delegations over unsolicited best-of-N answer sampling. The hook makes no extra
-model or cache-warming requests; stable text permits cache reuse but does not
-guarantee it. The hook is
-a behavioral instruction, not a scheduler, tool gate, or proof of model adherence
-or human understanding. After updating the package, finish live
-tasks and run `/reload` or start a new session.
+three fixed, named system-prompt sections: decision review, skill activation,
+and a clarification gate. The activation nudge uses the available skill list
+and its file location. Pi reads the skill proactively at relevant decision
+points in any project; keep both the hook and skill enabled. The full skill
+loads on demand. Decision guidance prefers short observe–act–inspect–revise cycles
+and distinct evidence-producing delegations over unsolicited best-of-N answer sampling.
+
+The clarification gate applies even when the skill is unavailable. It instructs
+the agent to pause affected work before consequential analysis, execution, or edits
+when intent has materially different readings, constraints conflict, or a correction
+exposes an unresolved assumption. The agent asks one focused question, offers
+alternatives and a recommendation, and waits for resolution or explicit delegation
+within accepted constraints. A generic “continue” does not resolve the choice.
+Bounded inspection and safe probes can continue without committing to an interpretation.
+Settled decisions and routine work do not require an interview. Revisit settled
+decisions only when evidence, changed constraints, or corrections invalidate their
+premises. The skill supplies the detailed [decision cases](../skills/architecture-refinement/SKILL.md#clarify-intent-when-drift-is-likely).
+
+The hook makes no extra model or cache-warming requests. Stable text permits
+cache reuse but does not guarantee it. The hook is a behavioral instruction,
+not a scheduler, tool gate, or proof of model adherence or human understanding.
+The `context_with_system` hook checks each outgoing request and restores missing
+or stale policy sections owned by this extension. It appends a transient section
+update only when needed. Stored history, other extensions' sections, and tool
+declarations remain unchanged. This covers background continuations that bypass
+`before_agent_start`; it does not repair policy delivery for other extensions.
+Offline tests cover user-started and repeated background tool continuations,
+including skill-disabled loading. They verify prompt delivery, not whether a
+model will ask or wait.
+After updating the package, finish live tasks and run `/reload` or start a new session.
 
 ## Local review
 

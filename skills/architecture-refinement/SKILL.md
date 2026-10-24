@@ -83,6 +83,64 @@ and expose counterexamples; it cannot by itself establish that its objective,
 fixtures, or oracle express the right problem. Additional generated specifications,
 tests, or reviewers may share the same mistaken assumption.
 
+## Clarify intent when drift is likely
+
+Pause affected work before consequential analysis, execution, or edits when
+intent has materially different plausible readings. Also pause when accepted
+constraints conflict or a correction exposes an unresolved assumption.
+A material difference changes the public contract, ownership boundary, scope,
+execution conditions, or evidence needed to accept the result.
+
+Use bounded inspection and safe probes to resolve factual gaps without committing
+to an interpretation. Stay within authorized scope and preserve user data.
+Source code can show what exists. Passing tests can show observed behavior.
+Neither establishes what the owner intends. Distinguish these roles when an
+example affects the choice:
+
+- **Analogy:** transfer a named property. Other details can be incidental.
+- **Acceptance case:** the stated case must work under its stated conditions.
+- **Constraint:** preserve a binding condition across proposed solutions.
+
+Ask one focused question about the unresolved choice. State the alternative
+interpretations and the consequence of each. Offer concrete alternatives and a
+reasoned recommendation. Make disagreement easy. The recommendation is not approval.
+
+For example:
+
+> Does “declarative FFI” mean manually declared signatures or bindings derived
+> from module metadata? This changes who maintains the signatures. I recommend
+> derived bindings if the metadata supplies the required types. Which do you want?
+
+Wait for an answer that resolves the choice or explicitly delegates it within
+accepted constraints. A generic “continue” does not settle an unresolved choice.
+If the owner is unavailable, report the pending decision and keep affected work
+paused. Independent safe investigation can continue. After resolution, state the
+accepted property and its verification condition briefly, then take a bounded step.
+
+Proceed without a question when accepted decisions or explicit delegation settle
+the choice. Routine work with no material intent fork also proceeds. Words such
+as “native,” “principled,” or “like this example” are not automatic triggers.
+Revisit settled decisions only when evidence, changed constraints, or corrections
+invalidate their premises. Obtain approval before changing an accepted commitment.
+Do not manufacture ambiguity or demand a complete specification before safe investigation.
+
+Use these cases to review routing and behavior:
+
+| Situation | Expected next action |
+|---|---|
+| “Make the FFI declarative” leaves manual declarations and metadata-derived bindings plausible. | Ask which signature-maintenance model is intended before choosing an implementation. |
+| Metadata contents are unknown, but the intended binding model is settled. | Inspect the metadata; a factual gap alone does not require an intent question. |
+| A reference library illustrates a named transport-detection property. | Apply that property within scope; do not copy unrelated architecture or ask again. |
+| A same-process failure is the accepted regression case. | Preserve that execution condition; a subprocess pass does not replace its evidence. |
+| “This is slop” rejects the design but leaves the desired boundary unclear. | Identify the unresolved boundary and ask one concrete question before another redesign. |
+| A correction specifies that generic dispatch must not know concrete operation enums. | Apply the clarified boundary within scope; no further intake is needed. |
+| The owner explicitly delegates the design choice within accepted constraints. | Choose, explain the trade-off, and proceed within those constraints. |
+| The owner says “continue” while a material intent choice remains unanswered. | Keep affected work paused and restate the pending choice concisely. |
+| “Compare these pipelines” leaves the success metric unclear, with no file edits requested. | Clarify the metric before selecting an evaluation method or issuing a consequential recommendation. |
+| A benchmark can run without edits, but process-isolation requirements remain ambiguous. | Clarify the execution conditions before the benchmark run. |
+| New evidence invalidates a settled decision's premise. | Surface the evidence and revisit the affected choice; obtain approval before changing an accepted commitment. |
+| A batch review runs without the owner. | Continue independent safe investigation and record unresolved decisions; do not select intent on the owner's behalf. |
+
 ## Run a bounded session
 
 Use these practices as moves in an inquiry, not mandatory phases or a form to fill
