@@ -100,6 +100,14 @@ test("source-loaded memory keeps the prompt structured and stable while the proj
     assert.equal(requests[2].texts.at(-1), "Which aligner does the fixture use?");
     assert(session.messages.every((message) => message.role !== "custom"), "the projection is request-local and is not stored in the session");
 
+    await session.prompt("Which aligner does the fixture use?");
+    assert.equal(requests.length, 4);
+    assert.deepEqual(requests[3].texts.slice(0, requests[2].texts.length), requests[2].texts,
+      "an unchanged fresh snapshot retains its earlier position across user turns");
+    assert.equal(requests[3].texts.filter((entry) => entry.includes("<memory_projection")).length, 1);
+    assert.equal(requests[3].systemPrompt, requests[2].systemPrompt);
+    assert(session.messages.every((message) => message.role !== "custom"));
+
     const version = JSON.parse(await readFile(path.join(host, "package.json"), "utf8")).version;
     t.diagnostic(`Pi ${version}; offline provider boundary: prompt structure and projection placement, not provider cache hits or model use of memory`);
   } finally {

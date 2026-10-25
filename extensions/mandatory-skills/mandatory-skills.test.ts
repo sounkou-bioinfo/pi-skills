@@ -24,8 +24,8 @@ test("extension supplies mandatory skills as one named prompt section and never 
   let handler: ((event: Event) => unknown) | undefined;
   const pi = {
     on(name: string, callback: typeof handler) {
-      assert.equal(name, "before_agent_start");
-      handler = callback;
+      assert(["before_agent_start", "context_with_system"].includes(name));
+      if (name === "before_agent_start") handler = callback;
     },
   } as unknown as ExtensionAPI;
 

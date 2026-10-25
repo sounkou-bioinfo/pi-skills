@@ -252,6 +252,18 @@ test("memory policy is stable and one transient projection is reused through a t
       if (String(projections[0].content).includes('mid-turn note')) throw new Error('mid-turn mutation changed frozen projection');
       const next = await handlers.context({ messages: [...loopMessages, { role: 'user', content: 'next turn', timestamp: 13 }] }, ctx);
       if (!String(next.messages.find(m => m.customType === 'pi-memory-projection').content).includes('mid-turn note')) throw new Error('next turn did not refresh');
+      const stableMessages = [...next.messages, { role: 'assistant', content: [], timestamp: 14 }, { role: 'user', content: 'next turn', timestamp: 15 }];
+      const stable = await handlers.context({ messages: stableMessages }, ctx);
+      const anchorIndex = next.messages.findIndex(m => m.customType === 'pi-memory-projection');
+      if (stable.messages.findIndex(m => m.customType === 'pi-memory-projection') !== anchorIndex) throw new Error('unchanged snapshot moved');
+      if (stable.messages.filter(m => m.customType === 'pi-memory-projection').length !== 1) throw new Error('snapshots accumulated');
+      const edited = stableMessages.map(m => m.role === 'user' && m.timestamp === 13 ? { ...m, content: 'edited branch user' } : m);
+      const reanchored = await handlers.context({ messages: edited }, ctx);
+      if (reanchored.messages.at(-2).customType !== 'pi-memory-projection') throw new Error('edited anchor was reused');
+      const removed = stableMessages.filter(m => !(m.role === 'user' && m.timestamp === 15));
+      const restored = await handlers.context({ messages: removed }, ctx);
+      const lastUser = restored.messages.map(m => m.role).lastIndexOf('user');
+      if (restored.messages[lastUser - 1].customType !== 'pi-memory-projection') throw new Error('missing anchor was reused');
       process.env.PI_MEMORY_PROJECT = 'project-a';
       await tool.execute('a', { op: 'note', text: 'Only project A knows this sentinel.' }, undefined, undefined, ctx);
       const a = await handlers.context({ messages }, ctx);

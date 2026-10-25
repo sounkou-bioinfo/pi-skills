@@ -143,7 +143,11 @@ current versus historical queries, applicability, SQL boundaries and rollout.
 
 Automatic global/project context shares eight-record and 12 KiB budgets. It stays
 frozen through the same project's tool loop, refreshing on a new turn or project
-switch; it is not persisted as another user message.
+switch. A byte-identical refreshed snapshot keeps its existing user-message anchor.
+If that anchor is absent or edited, the snapshot moves before the current user.
+Changed snapshots also move there and replace the previous snapshot. Only one
+snapshot is sent; stale facts do not accumulate for cache reuse. The snapshot
+is not persisted as another user message.
 
 The semantic views follow [INCATools Semantic-SQL](https://github.com/INCATools/semantic-sql).
 The summary hierarchy is independently implemented and inspired by
@@ -190,14 +194,19 @@ premises. The skill supplies the detailed [decision cases](../skills/architectur
 The hook makes no extra model or cache-warming requests. Stable text permits
 cache reuse but does not guarantee it. The hook is a behavioral instruction,
 not a scheduler, tool gate, or proof of model adherence or human understanding.
-The `context_with_system` hook checks each outgoing request and restores missing
-or stale policy sections owned by this extension. It appends a transient section
-update only when needed. Stored history, other extensions' sections, and tool
-declarations remain unchanged. This covers background continuations that bypass
-`before_agent_start`; it does not repair policy delivery for other extensions.
+The [invariant-section projection](../extensions/shared/prompt-sections.ts) places
+current owned policies in the first outgoing system message. It removes only
+those owned keys from later system updates in that projection. Stored history,
+unowned fields, and tool declarations remain unchanged. Expert discipline,
+mandatory skills, permanent-memory policy, and local-review policy use this path.
+It covers background continuations that bypass `before_agent_start` without
+moving a transient repair across tool results. Updating a policy intentionally
+changes its initial prompt section.
+
 Offline tests cover user-started and repeated background tool continuations,
-including skill-disabled loading. They verify prompt delivery, not whether a
-model will ask or wait.
+including skill-disabled loading. Native Codex tests cover both mid-conversation
+system-message modes and the following user turn. These tests establish delivery
+and transport continuity, not provider cache hits or whether a model will ask or wait.
 After updating the package, finish live tasks and run `/reload` or start a new session.
 
 ## Local review

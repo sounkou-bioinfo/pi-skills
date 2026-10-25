@@ -27,13 +27,13 @@ const user2 = { role: "user", content: "Next", timestamp: 6 };
 class FakeWebSocket extends EventTarget {
   static requests = [];
   static responseNumber = 0;
-  static firstResponseUsesTool = false;
+  static toolResponses = 0;
   readyState = 0;
 
-  static reset({ firstResponseUsesTool = false } = {}) {
+  static reset({ firstResponseUsesTool = false, toolResponses = firstResponseUsesTool ? 1 : 0 } = {}) {
     FakeWebSocket.requests = [];
     FakeWebSocket.responseNumber = 0;
-    FakeWebSocket.firstResponseUsesTool = firstResponseUsesTool;
+    FakeWebSocket.toolResponses = toolResponses;
   }
 
   constructor() {
@@ -44,8 +44,8 @@ class FakeWebSocket extends EventTarget {
   send(text) {
     FakeWebSocket.requests.push(JSON.parse(text));
     const number = ++FakeWebSocket.responseNumber;
-    const primaryItem = FakeWebSocket.firstResponseUsesTool && number === 1
-      ? { id: "fc_1", call_id: "call_1", type: "function_call", name: "read",
+    const primaryItem = number <= FakeWebSocket.toolResponses
+      ? { id: `fc_${number}`, call_id: `call_${number}`, type: "function_call", name: "read",
           arguments: JSON.stringify({ path: "a" }), status: "completed" }
       : { id: `msg_${number}`, type: "message", role: "assistant", status: "completed",
           content: [{ type: "output_text", text: `answer ${number}`, annotations: [] }] };
@@ -77,7 +77,7 @@ class FakeWebSocket extends EventTarget {
   }
 }
 
-const run = (sessionId, messages) => codex.stream(model, { messages }, {
+const run = (sessionId, messages, activeModel = model) => codex.stream(activeModel, { messages }, {
   apiKey, transport: "auto", sessionId, reasoningEffort: "medium",
   websocketConnectTimeoutMs: 100, websocketIdleTimeoutMs: 100,
 }).result();
@@ -129,6 +129,42 @@ test("Codex sends deltas across tool continuation and the following user turn", 
     assert.equal(stats.sseFallbacks, 0);
   });
 });
+
+for (const midConversation of [false, true]) {
+  test(`invariant policies preserve Codex continuation with mid-conversation system messages ${midConversation}`, async () => {
+    const { registerInvariantSections } = await import("../.cache-telemetry-test-build/shared/prompt-sections.js");
+    const { getCurrentSystemMessage } = await import(pathToFileURL(path.join(piAi, "dist/index.js")).href);
+    const handlers = [];
+    const groups = [["expert_decision_discipline", "architecture_refinement", "clarification_gate"], ["mandatory_skills"], ["permanent_memory"], ["local_review_policy"]];
+    const policies = Object.fromEntries(groups.flat().map((name) => [name, `Invariant ${name}.`]));
+    for (const names of groups) registerInvariantSections({ on: (name, callback) => { if (name === "context_with_system") handlers.push(callback); } }, Object.fromEntries(names.map((name) => [name, policies[name]])));
+    const project = (messages) => handlers.reduce((current, handler) => handler({ messages: current })?.messages ?? current, messages);
+    const sections = Object.fromEntries(Object.entries(policies).map(([name, text]) => [name, `<${name}>\n${text}\n</${name}>`]));
+    const deleted = Object.fromEntries(Object.keys(sections).map((name) => [name, null]));
+    const activeModel = { ...model, id: midConversation ? "gpt-6-astra" : model.id, compat: { supportsMidConvoSystemMessages: midConversation } };
+    const sessionId = `codex-invariant-policies-${midConversation}`;
+    await withFakeWebSocket(sessionId, { toolResponses: 2 }, async () => {
+      const source = [{ ...system, sections, toolsAdded: [{ name: "read", description: "Read", parameters: { type: "object", properties: { path: { type: "string" } } } }] }, user1];
+      for (let i = 0; i < 3; i++) {
+        const before = structuredClone(source);
+        const projected = project(source);
+        assert.deepEqual(source, before, "stored source history stays intact");
+        assert.deepEqual(getCurrentSystemMessage(projected).sections, sections);
+        const response = await run(sessionId, projected, activeModel);
+        assert.notEqual(response.stopReason, "error", response.errorMessage);
+        source.push(response);
+        const call = response.content.find((part) => part.type === "toolCall");
+        if (call) source.push({ role: "system", content: "", sections: deleted, timestamp: 10 + i },
+          { role: "toolResult", toolCallId: call.id, toolName: call.name, content: [{ type: "text", text: "Fixture result." }], isError: false, timestamp: 20 + i });
+      }
+      source.push({ role: "system", content: "", sections, timestamp: 30 }, user2);
+      const response = await run(sessionId, project(source), activeModel);
+      assert.notEqual(response.stopReason, "error", response.errorMessage);
+      assert.deepEqual(FakeWebSocket.requests.map((request) => request.previous_response_id), [undefined, "resp_1", "resp_2", "resp_3"]);
+      assert.equal(codex.getOpenAICodexWebSocketDebugStats(sessionId).fullContextRequests, 1);
+    });
+  });
+}
 
 test("Codex sends full context when non-input request fields change", async () => {
   const sessionId = "codex-cache-static-drift";

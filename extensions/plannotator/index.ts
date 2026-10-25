@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { registerInvariantSections } from "../shared/prompt-sections.js";
 import plannotator, { hasPlanBrowserHtml, hasReviewBrowserHtml } from "./upstream.js";
 import { configureLocalReview, LOCAL_REVIEW_POLICY } from "./config.js";
 
@@ -11,7 +12,5 @@ export default function localReview(pi: ExtensionAPI): void {
     }
   });
   plannotator(pi);
-  pi.on("before_agent_start", (event) => {
-    event.systemPromptOptions.sections.local_review_policy = LOCAL_REVIEW_POLICY;
-  });
+  registerInvariantSections(pi, { local_review_policy: LOCAL_REVIEW_POLICY });
 }

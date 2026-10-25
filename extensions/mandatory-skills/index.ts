@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { registerInvariantSections } from "../shared/prompt-sections.js";
 
 export const MANDATORY_SKILL_NAMES = ["no-ghosts", "native-tool-discipline"] as const;
 export const MANDATORY_SKILLS = MANDATORY_SKILL_NAMES.map((name) => ({
@@ -16,7 +17,5 @@ ${source}
 export const MANDATORY_SKILLS_SECTION = "mandatory_skills";
 
 export default function extension(pi: ExtensionAPI): void {
-  pi.on("before_agent_start", (event) => {
-    event.systemPromptOptions.sections[MANDATORY_SKILLS_SECTION] = MANDATORY_SKILLS_BLOCK;
-  });
+  registerInvariantSections(pi, { [MANDATORY_SKILLS_SECTION]: MANDATORY_SKILLS_BLOCK });
 }

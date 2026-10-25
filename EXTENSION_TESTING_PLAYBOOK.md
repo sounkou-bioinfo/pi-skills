@@ -190,9 +190,12 @@ and human-interface gaps.
   It checks provider-visible nudges, available/absent skill discovery, explicit skill
   invocation, and user-started and repeated background tool continuations.
   Projection tests preserve stored history, unrelated sections, and tool declarations.
-  Unchanged policy sections need no projection repair. `scripts/memory-sdk.test.mjs`
+  Invariant policies stay at the initial system position; native Codex tests cover
+  both mid-conversation system-message modes across tool and user continuations.
+  `scripts/memory-sdk.test.mjs`
   (part of `npm run test:memory`) uses the same offline provider pattern for the
-  memory prompt section and projection; `PI_MEMORY_HOST_DIR` selects its host. Set `PI_EXPERT_HOST_DIR` to the
+  memory prompt section and projection, including stable anchors for unchanged
+  snapshots; `PI_MEMORY_HOST_DIR` selects its host. Set `PI_EXPERT_HOST_DIR` to the
   host Pi package directory and `PI_EXPERT_SOURCE` to the source package to load.
   `npm run test:expert-discipline:package` installs a local tarball with
   `--omit=dev --ignore-scripts`, then exercises that installed source with the host

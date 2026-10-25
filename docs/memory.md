@@ -76,6 +76,11 @@ and recorded checkout metadata; a detected project change also invalidates the
 projection. Out-of-band Git changes without a tool call are seen at the next turn.
 No claim of continuous filesystem monitoring or loaded-runtime detection is made.
 
+A byte-identical refreshed snapshot keeps its original user-message anchor while
+that message remains unchanged at the recorded position. A changed snapshot or
+an edited/missing anchor places the single current snapshot before the latest
+user message. Earlier snapshots are not retained to manufacture cache hits.
+
 ## Existing databases and older sessions
 
 No history is rewritten, guessed into a project, or silently declared global.

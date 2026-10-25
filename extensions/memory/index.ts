@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { registerInvariantSections } from "../shared/prompt-sections.js";
 import { Static, Type } from "typebox";
 import { GLOBAL_GRAPH, MemoryDatabase, type SummaryTask, type WakeRow } from "./store.js";
 import { resolveProject, type ProjectContext } from "./project.js";
@@ -40,6 +41,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
   let sessionId: string | undefined;
   let project: ProjectContext | undefined;
   let turnProjection: TurnProjection | undefined;
+  let projectionAnchor: { index: number; user: string } | undefined;
   let lifecycleTail: Promise<void> = Promise.resolve();
 
   function withLifecycle<T>(work: () => Promise<T>): Promise<T> {
@@ -166,11 +168,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
       ctx.ui.notify(`Memory unavailable: ${error instanceof Error ? error.message : String(error)}`, "warning");
     }
   });
-  // A named section keeps the prompt structured: Pi records it in the transcript
-  // and sends a later change as a section update, not as a new whole prompt.
-  pi.on("before_agent_start", (event) => {
-    event.systemPromptOptions.sections[MEMORY_POLICY_SECTION] = MEMORY_POLICY;
-  });
+  registerInvariantSections(pi, { [MEMORY_POLICY_SECTION]: MEMORY_POLICY });
 
   pi.on("context", async (event, ctx) => {
     const messages = event.messages.filter((message) => message.role !== "custom" || message.customType !== MEMORY_CONTEXT_TYPE);
@@ -189,7 +187,9 @@ export default function memoryExtension(pi: ExtensionAPI): void {
       if (turnProjection?.key !== key) {
         await withDatabase(ctx, async (store) => {
           const active = await refreshProject(ctx);
-          turnProjection = await buildTurnProjection(store, key, prompt, active);
+          const next = await buildTurnProjection(store, key, prompt, active);
+          if (turnProjection?.text !== next.text) projectionAnchor = undefined;
+          turnProjection = next;
         });
       }
     } catch {
@@ -198,11 +198,14 @@ export default function memoryExtension(pi: ExtensionAPI): void {
       return { messages };
     }
     if (!turnProjection) return { messages };
+    if (!projectionAnchor || JSON.stringify(messages[projectionAnchor.index]) !== projectionAnchor.user) {
+      projectionAnchor = { index: userIndex, user: JSON.stringify(user) };
+    }
     return { messages: [
-      ...messages.slice(0, userIndex),
+      ...messages.slice(0, projectionAnchor.index),
       { role: "custom" as const, customType: MEMORY_CONTEXT_TYPE, content: turnProjection.text, display: false,
         details: { transactionId: turnProjection.transactionId, query: turnProjection.query }, timestamp: turnProjection.timestamp },
-      ...messages.slice(userIndex),
+      ...messages.slice(projectionAnchor.index),
     ] };
   });
 

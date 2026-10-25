@@ -77,6 +77,8 @@ blocks, marker budgeting, and cancellation.
 Live provider-reported usage establishes cache reads for these Haiku requests.
 It does not establish subscription-quota savings, billing eligibility for other
 accounts, long-idle retention, or behavior on other Claude models. The separate
-OpenAI screenshot showing a change at `input[135]` is not explained by these
-Claude fixes; identifying that change requires the affected session/request
-evidence. See [operations](operations.md) for request-hook and activation rules.
+[OpenAI screenshot investigation](openai-cache-trim-investigation.md) identifies
+the change at `input[135]` as a 17-result context-budget trim and records separate
+host-lifecycle and unattributed misses. Those cases are not resolved by the
+Claude fixes. See [operations](operations.md) for request-hook and activation
+rules.

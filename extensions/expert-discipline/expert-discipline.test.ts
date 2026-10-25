@@ -99,12 +99,10 @@ test("outgoing policy restoration preserves history, unrelated removals, and too
   const result = context({ messages });
   assert(result);
   assert.deepEqual(messages, original);
-  assert.deepEqual(result.messages.slice(0, -1), original);
+  assert.equal(result.messages.length, original.length);
   assert.equal(result.messages[0], messages[0]);
-  assert.deepEqual(result.messages.at(-1), { role: "system", content: "", timestamp: 0, sections: {
-    architecture_refinement: renderedSections.architecture_refinement,
-    clarification_gate: renderedSections.clarification_gate,
-  } });
+  assert.equal(result.messages[1], messages[1]);
+  assert.deepEqual(result.messages[2], { ...messages[2], sections: { other_extension: null } });
   const effective = getCurrentSystemMessage(result.messages);
   assert.deepEqual(effective?.sections, renderedSections);
   assert.deepEqual(effective?.toolsAdded?.map((tool) => tool.name), ["probe"]);
@@ -113,11 +111,33 @@ test("outgoing policy restoration preserves history, unrelated removals, and too
   assert.deepEqual(context({ messages }), result, "unchanged source context produces identical repair bytes");
 });
 
+test("policy projection is a stable prefix across repeated removals and a following user turn", () => {
+  const { context } = loadHandlers();
+  const first: Message[] = [
+    { role: "system", content: "Base.", sections: { unrelated: "Keep." }, timestamp: 0 },
+    { role: "user", content: "Inspect.", timestamp: 1 },
+    { role: "system", content: "", sections: { clarification_gate: null }, timestamp: 2 },
+  ];
+  const projected = context({ messages: first });
+  assert(projected);
+  const next: Message[] = [...first,
+    { role: "system", content: "", sections: renderedSections, timestamp: 3 },
+    { role: "system", content: "", sections: { architecture_refinement: null }, timestamp: 4 },
+    { role: "user", content: "Continue.", timestamp: 5 },
+  ];
+  const continued = context({ messages: next });
+  assert(continued);
+  assert.deepEqual(continued.messages.slice(0, first.length), projected.messages);
+  assert.equal(getCurrentSystemMessage(continued.messages)?.sections?.unrelated, "Keep.");
+  assert.equal(context(continued), undefined);
+});
+
 test("a context without policy sections receives only this extension's named sections", () => {
   const { context } = loadHandlers();
   const messages: Message[] = [{ role: "user", content: "Resume.", timestamp: 1 }];
   const result = context({ messages });
   assert(result);
-  assert.deepEqual(result.messages.at(-1), { role: "system", content: "", sections: renderedSections, timestamp: 0 });
+  assert.deepEqual(result.messages[0], { role: "system", content: "", sections: renderedSections, timestamp: 0 });
+  assert.equal(result.messages[1], messages[0]);
   assert.deepEqual(getCurrentSystemMessage(result.messages)?.sections, renderedSections);
 });

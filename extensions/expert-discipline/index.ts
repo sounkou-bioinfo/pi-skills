@@ -1,5 +1,5 @@
-import { getCurrentSystemMessage, type SystemMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { registerInvariantSections } from "../shared/prompt-sections.js";
 
 /** Byte-stable guidance; each block is its own named prompt section. */
 export const EXPERT_DISCIPLINE_BLOCK = `Expert decision discipline: for every consequential choice, apply the standards of a leading expert in the relevant field. Identify the strongest applicable reason that expert would reject the current candidate; if it applies, reject that candidate. Prefer what the expert would judge correct while honoring explicit user constraints, rather than merely choosing the cheapest constraint-satisfying option. State the decision, supporting evidence, uncertainty, and every material trade-off (including cost, risk, reversibility, scope, and alternatives). Keep private deliberation private: report concise conclusions and evidence, not hidden chain-of-thought. Do not claim certainty beyond the evidence. Prefer short observe-act-inspect-revise cycles to best-of-N answers. Do not run independent models on one unchanged question merely to rank outputs; delegate distinct evidence-producing subproblems, revisit with new evidence, or honor user-requested comparisons.`;
@@ -22,21 +22,5 @@ export const PROMPT_SECTIONS = {
 } as const;
 
 export default function extension(pi: ExtensionAPI): void {
-  pi.on("before_agent_start", (event) => {
-    Object.assign(event.systemPromptOptions.sections, PROMPT_SECTIONS);
-  });
-
-  // Background continuations can bypass before_agent_start. Repair the outgoing
-  // projection only, preserving stored history, unrelated sections, and tools.
-  pi.on("context_with_system", (event) => {
-    const current = getCurrentSystemMessage(event.messages)?.sections;
-    const sections: Record<string, string> = {};
-    for (const [name, block] of Object.entries(PROMPT_SECTIONS)) {
-      const rendered = `<${name}>\n${block}\n</${name}>`;
-      if (current?.[name] !== rendered) sections[name] = rendered;
-    }
-    if (Object.keys(sections).length === 0) return;
-    const update: SystemMessage = { role: "system", content: "", sections, timestamp: 0 };
-    return { messages: [...event.messages, update] };
-  });
+  registerInvariantSections(pi, PROMPT_SECTIONS);
 }
