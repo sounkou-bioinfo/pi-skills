@@ -32,6 +32,16 @@ SELECT * FROM wake ORDER BY range_start;
 -- name: current_notes
 SELECT * FROM current_note ORDER BY note_index DESC LIMIT ?;
 
+-- name: slot_replacements
+SELECT c.*
+FROM current_note c
+WHERE EXISTS (
+    SELECT 1 FROM as_of_note old
+    WHERE old.stanza IN (SELECT unnest(from_json(?::VARCHAR, '["VARCHAR"]')))
+      AND old.subject = c.subject AND old.predicate = c.predicate AND old.stanza <> c.stanza
+)
+ORDER BY c.note_index DESC;
+
 -- name: next_summary_task
 SELECT * FROM next_summary_task;
 

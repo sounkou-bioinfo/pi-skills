@@ -199,27 +199,33 @@ test("multiple processes initialize and append through SQLite WAL without collid
   }
 });
 
-test("memory policy is stable and one transient projection is reused through a tool loop", async () => {
+test("memory policy is stable and projections are append-only across turns, reloads, and branches", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pi-memory-context-"));
   const databasePath = join(directory, "memory.sqlite");
   try {
-    const extensionUrl = new URL("./index.js", import.meta.url).href;
     const code = `
       process.env.PI_MEMORY_DB = process.argv[1];
       delete process.env.PI_MEMORY_PROJECT;
       const { default: extension } = await import(${JSON.stringify(new URL("./index.js", import.meta.url).href)});
-      const handlers = {};
-      let tool;
-      const pi = {
-        registerTool(value) { tool = value; },
-        on(name, handler) { handlers[name] = handler; },
-      };
-      extension(pi);
+      const entries = [];
+      let branch = () => entries;
       const ctx = {
-        sessionManager: { getSessionId() { return 'context-session'; } },
+        sessionManager: { getSessionId() { return 'context-session'; }, getBranch() { return branch(); } },
         cwd: ${JSON.stringify(directory)},
         ui: { setStatus() {}, notify() {} },
       };
+      const load = () => {
+        const loaded = { handlers: {} };
+        extension({
+          registerTool(value) { loaded.tool = value; },
+          on(name, handler) { loaded.handlers[name] = handler; },
+          appendEntry(customType, data) { entries.push({ type: 'custom', customType, data: JSON.parse(JSON.stringify(data)) }); },
+        });
+        return loaded;
+      };
+      let { handlers, tool } = load();
+      const projectionsOf = (result) => result.messages.filter((message) => message.customType === 'pi-memory-projection');
+      const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
       await handlers.session_start({}, ctx);
       await tool.execute('seed', { op: 'note', graph: 'global', text: 'DuckHTS uses public reproducible artifacts.' }, undefined, undefined, ctx);
       const historicalStatus = await tool.execute('old-status', { op: 'status', graph: 'global', as_of: 0 }, undefined, undefined, ctx);
@@ -237,6 +243,8 @@ test("memory policy is stable and one transient projection is reused through a t
       if (firstProjection.customType !== 'pi-memory-projection') throw new Error('missing projection before current user');
       if (first.messages[1].role !== 'user') throw new Error('projection must precede current user');
       if (!String(firstProjection.content).includes('DuckHTS uses public')) throw new Error('missing task memory');
+      if (!String(firstProjection.content).startsWith('<memory_projection>\\nProject: none.\\n')) throw new Error('volatile receipts entered the projection text');
+      if (entries.length !== 1 || entries[0].customType !== 'pi-memory-projection-v1') throw new Error('delivered projection was not persisted on the branch');
 
       await tool.execute('midturn', { op: 'note', graph: 'global', text: 'This mid-turn note belongs to the next user turn.' }, undefined, undefined, ctx);
       const loopMessages = [
@@ -245,43 +253,50 @@ test("memory policy is stable and one transient projection is reused through a t
         { role: 'toolResult', toolCallId: 'x', toolName: 'read', content: [{ type: 'text', text: 'ok' }], isError: false, timestamp: 12 },
       ];
       const second = await handlers.context({ messages: loopMessages }, ctx);
-      const projections = second.messages.filter((message) => message.customType === 'pi-memory-projection');
-      if (projections.length !== 1) throw new Error('projection accumulated');
-      if (second.messages[0].customType !== 'pi-memory-projection' || second.messages[1].role !== 'user') throw new Error('projection moved during tool loop');
-      if (projections[0].content !== firstProjection.content) throw new Error('projection recomputed during the same turn');
-      if (String(projections[0].content).includes('mid-turn note')) throw new Error('mid-turn mutation changed frozen projection');
+      if (!same(second.messages, loopMessages)) throw new Error('the projection changed or moved during the tool loop');
+      if (entries.length !== 1) throw new Error('a tool-loop request delivered a projection');
+
       const next = await handlers.context({ messages: [...loopMessages, { role: 'user', content: 'next turn', timestamp: 13 }] }, ctx);
-      if (!String(next.messages.find(m => m.customType === 'pi-memory-projection').content).includes('mid-turn note')) throw new Error('next turn did not refresh');
+      if (!same(next.messages.slice(0, loopMessages.length), loopMessages)) throw new Error('a new turn rewrote an earlier projection');
+      const added = projectionsOf(next);
+      if (added.length !== 2 || next.messages.at(-2) !== added[1]) throw new Error('the new turn projection must precede the new user message');
+      if (!String(added[1].content).includes('mid-turn note')) throw new Error('next turn did not add the new note');
+      if (String(added[1].content).includes('DuckHTS uses public')) throw new Error('an already shown record was repeated');
+
       const stableMessages = [...next.messages, { role: 'assistant', content: [], timestamp: 14 }, { role: 'user', content: 'next turn', timestamp: 15 }];
       const stable = await handlers.context({ messages: stableMessages }, ctx);
-      const anchorIndex = next.messages.findIndex(m => m.customType === 'pi-memory-projection');
-      if (stable.messages.findIndex(m => m.customType === 'pi-memory-projection') !== anchorIndex) throw new Error('unchanged snapshot moved');
-      if (stable.messages.filter(m => m.customType === 'pi-memory-projection').length !== 1) throw new Error('snapshots accumulated');
-      const edited = stableMessages.map(m => m.role === 'user' && m.timestamp === 13 ? { ...m, content: 'edited branch user' } : m);
+      if (!same(stable.messages, stableMessages) || entries.length !== 2) throw new Error('unchanged memory added a projection');
+
+      await handlers.session_shutdown();
+      ({ handlers, tool } = load());
+      await handlers.session_start({}, ctx);
+      const reloaded = await handlers.context({ messages: stableMessages.filter((message) => message.customType !== 'pi-memory-projection') }, ctx);
+      if (!same(reloaded.messages, stable.messages)) throw new Error('a reload did not replay delivered projections byte-identically');
+
+      branch = () => entries.slice(0, 1);
+      await handlers.session_tree({}, ctx);
+      const edited = stableMessages.map((message) => message.role === 'user' && message.timestamp === 13 ? { ...message, content: 'edited branch user' } : message);
       const reanchored = await handlers.context({ messages: edited }, ctx);
-      if (reanchored.messages.at(-2).customType !== 'pi-memory-projection') throw new Error('edited anchor was reused');
-      const removed = stableMessages.filter(m => !(m.role === 'user' && m.timestamp === 15));
-      const restored = await handlers.context({ messages: removed }, ctx);
-      const lastUser = restored.messages.map(m => m.role).lastIndexOf('user');
-      if (restored.messages[lastUser - 1].customType !== 'pi-memory-projection') throw new Error('missing anchor was reused');
+      if (projectionsOf(reanchored).length !== 2 || !same(reanchored.messages[0], firstProjection)) throw new Error('an edited branch lost or rewrote its earlier projection');
+      if (reanchored.messages.at(-2).customType !== 'pi-memory-projection' || !String(reanchored.messages.at(-2).content).includes('mid-turn note')) throw new Error('an edited anchor kept its projection');
+      branch = () => entries.slice(0, 2);
+      await handlers.session_tree({}, ctx);
+      if (!same((await handlers.context({ messages: stableMessages }, ctx)).messages, stable.messages)) throw new Error('returning to a branch changed its projections');
+      const removed = stableMessages.filter((message) => !(message.role === 'user' && message.timestamp === 15));
+      if (!same((await handlers.context({ messages: removed }, ctx)).messages, stable.messages.slice(0, -1))) throw new Error('a removed user message changed earlier projections');
+
+      branch = () => entries;
       process.env.PI_MEMORY_PROJECT = 'project-a';
       await tool.execute('a', { op: 'note', text: 'Only project A knows this sentinel.' }, undefined, undefined, ctx);
-      const a = await handlers.context({ messages }, ctx);
-      if (!String(a.messages[0].content).includes('Only project A')) throw new Error('missing project A');
+      const aMessages = [...stable.messages, { role: 'assistant', content: [], timestamp: 16 }, { role: 'user', content: 'project a turn', timestamp: 17 }];
+      const a = await handlers.context({ messages: aMessages }, ctx);
+      const aProjection = String(a.messages.at(-2).content);
+      if (!aProjection.includes('Project: project-a.') || !aProjection.includes('Only project A') || !aProjection.includes('DuckHTS uses public')) throw new Error('a project change did not start a self-contained projection');
       process.env.PI_MEMORY_PROJECT = 'project-b';
-      const b = await handlers.context({ messages: a.messages }, ctx);
-      if (String(b.messages[0].content).includes('Only project A')) throw new Error('project switch retained old projection');
-      if (!String(b.messages[0].content).includes('DuckHTS uses public')) throw new Error('global note lost on switch');
-      // Opaque context-key strings; project identity is explicit in this fake hook.
-      const colonA = { ...ctx, cwd: ctx.cwd + '/colon:suffix' };
-      const colonB = { ...ctx, cwd: ctx.cwd + '/colon' };
-      process.env.PI_MEMORY_PROJECT = 'tail';
-      await tool.execute('colon-a', { op: 'note', text: 'Only colon-key A knows this sentinel.' }, undefined, undefined, colonA);
-      const ca = await handlers.context({ messages }, colonA);
-      if (!String(ca.messages[0].content).includes('Only colon-key A')) throw new Error('missing colon-key A');
-      process.env.PI_MEMORY_PROJECT = 'suffix:tail';
-      const cb = await handlers.context({ messages: ca.messages }, colonB);
-      if (String(cb.messages[0].content).includes('Only colon-key A')) throw new Error('ambiguous key retained another project');
+      const b = await handlers.context({ messages: [...a.messages, { role: 'assistant', content: [], timestamp: 18 }, { role: 'user', content: 'project b turn', timestamp: 19 }] }, ctx);
+      const bProjection = String(b.messages.at(-2).content);
+      if (bProjection.includes('Only project A') || !bProjection.includes('DuckHTS uses public')) throw new Error('project B saw project A or lost the global note');
+      if (!same(b.messages.slice(0, a.messages.length), a.messages)) throw new Error('a project change rewrote earlier projections');
       const denied = await tool.execute('legacy', { op: 'note', graph: 'legacy', text: 'forbidden' }, undefined, undefined, ctx);
       if (!denied.isError) throw new Error('legacy write was accepted');
       await handlers.session_shutdown();
@@ -310,7 +325,7 @@ test("extension lifecycle serializes open, use, and shutdown", async () => {
       };
       extension(pi);
       const ctx = {
-        sessionManager: { getSessionId() { return 'lifecycle-session'; } },
+        sessionManager: { getSessionId() { return 'lifecycle-session'; }, getBranch() { return []; } },
         cwd: ${JSON.stringify(directory)},
         ui: { setStatus() {}, notify() {} },
       };
@@ -446,9 +461,19 @@ test("scope and current-slot filtering precede FTS limits; applicability is sepa
     const task = (await fixture.db.summaryTask(a))!;
     assert.match(task.source[0]!.text, /tested-old/);
     assert.match(task.source[0]!.text, /checkout-new/);
-    const projection = await buildTurnProjection(fixture.db, "one", "watchdog", { id: "a", graph: a, identity: "override", root: fixture.directory });
+    const projection = await buildTurnProjection(fixture.db, "watchdog", { id: "a", graph: a, identity: "override", root: fixture.directory });
     assert.match(projection.text, /outside the evaluator/);
     assert.doesNotMatch(projection.text, /old implementation report|Watchdog watchdog/);
+    assert.deepEqual(projection.stanzas, [second.stanza]);
+    const repeated = await buildTurnProjection(fixture.db, "watchdog", { id: "a", graph: a, identity: "override", root: fixture.directory }, new Set(projection.stanzas));
+    assert.deepEqual(repeated.stanzas, []);
+    assert.doesNotMatch(repeated.text, /outside the evaluator/);
+    const third = await fixture.db.note({ graph: a, subject: "watchdog", predicate: "design:decision", text: "Watchdog moved into a supervisor process." });
+    await fixture.db.note({ graph: a, text: "Unrelated newer note one." });
+    await fixture.db.note({ graph: a, text: "Unrelated newer note two." });
+    const followUp = await buildTurnProjection(fixture.db, "zzz", { id: "a", graph: a, identity: "override", root: fixture.directory }, new Set(projection.stanzas));
+    assert.equal(followUp.stanzas[0], third.stanza, "a shown record's replacement leads even without a task match");
+    assert.match(followUp.text, /supervisor process/);
   } finally { await fixture.close(); }
 });
 
@@ -467,13 +492,13 @@ test("global and active-project projection share one bounded budget without lega
     for (let index = 0; index < 6; index++) {
       await fixture.db.note({ graph: "project:a", text: `${index < 4 ? "Targetmatch" : "Recent"} Alpha applicability ${index}: ${"ã".repeat(115)}`, evidence });
     }
-    const a = await buildTurnProjection(fixture.db, "a", "targetmatch", { id: "a", graph: "project:a", identity: "override", root: fixture.directory });
+    const a = await buildTurnProjection(fixture.db, "targetmatch", { id: "a", graph: "project:a", identity: "override", root: fixture.directory });
     assert.match(a.text, /Shared preference/);
     assert.match(a.text, /Alpha applicability/);
     assert.doesNotMatch(a.text, /Legacy private sentinel|Foreign private sentinel/);
     assert(Buffer.byteLength(a.text) <= 12 * 1024);
     assert.match(a.text, /records omitted by the projection byte budget/);
-    const b = await buildTurnProjection(fixture.db, "b", "alpha", { id: "b", graph: "project:b", identity: "override", root: fixture.directory });
+    const b = await buildTurnProjection(fixture.db, "alpha", { id: "b", graph: "project:b", identity: "override", root: fixture.directory });
     assert.match(b.text, /Shared preference/);
     assert.match(b.text, /Foreign private sentinel/);
     assert.doesNotMatch(b.text, /Alpha applicability|Legacy private sentinel/);

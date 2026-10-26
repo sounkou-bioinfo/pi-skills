@@ -147,13 +147,13 @@ v1 history. Scope applies to retrieval and compression, not just note labels.
 No old history is rewritten. See [project memory](memory.md) for identity rules,
 current versus historical queries, applicability, SQL boundaries and rollout.
 
-Automatic global/project context shares eight-record and 12 KiB budgets. It stays
-frozen through the same project's tool loop, refreshing on a new turn or project
-switch. A byte-identical refreshed snapshot keeps its existing user-message anchor.
-If that anchor is absent or edited, the snapshot moves before the current user.
-Changed snapshots also move there and replace the previous snapshot. Only one
-snapshot is sent; stale facts do not accumulate for cache reuse. The snapshot
-is not persisted as another user message.
+Automatic global/project context is append-only. The first request of a user
+turn may add a projection, within eight-record and 12 KiB budgets, before that
+user message. It carries only records the branch has not shown for the active
+project, led by current replacements for superseded shown records; a turn with
+nothing new adds nothing. Delivered projections never move or change. They are
+recorded as `pi-memory-projection-v1` branch entries and replayed after reload or
+tree navigation; they are not stored as user messages.
 
 The semantic views follow [INCATools Semantic-SQL](https://github.com/INCATools/semantic-sql).
 The summary hierarchy is independently implemented and inspired by

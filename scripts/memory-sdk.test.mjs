@@ -16,7 +16,7 @@ const { createAssistantMessageEventStream, getCurrentSystemPrompt, getInitialSys
 const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 const text = (message) => typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
 
-test("source-loaded memory keeps the prompt structured and stable while the projection follows new notes", { timeout: 60000 }, async (t) => {
+test("source-loaded memory keeps the prompt structured and stable while projections append new notes", { timeout: 60000 }, async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), "pi-memory-sdk-"));
   const cwd = path.join(root, "project");
   const agentDir = path.join(root, "agent");
@@ -64,8 +64,9 @@ test("source-loaded memory keeps the prompt structured and stable while the proj
     });
     await loader.reload();
     assert.deepEqual(loader.getExtensions().errors, []);
+    const sessionManager = sdk.SessionManager.inMemory(cwd);
     ({ session } = await sdk.createAgentSession({ cwd, agentDir, modelRuntime, settingsManager, resourceLoader: loader,
-      sessionManager: sdk.SessionManager.inMemory(cwd), model, thinkingLevel: "off" }));
+      sessionManager, model, thinkingLevel: "off" }));
     sdk.initTheme("dark", false);
     await session.bindExtensions({ mode: "print", onError: (error) => errors.push(error) });
     await modelRuntime.setRuntimeApiKey(model.provider, "offline-fixture");
@@ -87,24 +88,27 @@ test("source-loaded memory keeps the prompt structured and stable while the proj
       assert(request.systemPrompt.startsWith("Fixture base prompt."));
       assert.equal(request.systemPrompt.split("<permanent_memory>\nPERMANENT MEMORY POLICY\n").length - 1, 1);
       assert(!request.systemPrompt.includes("minimap2"));
-
-      const projections = request.texts.filter((entry) => entry.includes("<memory_projection"));
-      assert.equal(projections.length, 1, "each request carries one projection; earlier ones are replaced");
-      assert.equal(request.texts.at(-2), projections[0], "the projection sits immediately before the current user message");
     }
-    const [noteRequest, noteResult, recall] = requests.map((request) => request.texts.find((entry) => entry.includes("<memory_projection")));
-    assert(!noteRequest.includes("minimap2"));
-    assert.equal(noteResult, noteRequest, "the projection is frozen through a turn's tool loop");
-    assert.match(recall, /Project: sdk-fixture;/);
+    const projections = (request) => request.texts.filter((entry) => entry.includes("<memory_projection"));
+    const [noteProjection] = projections(requests[0]);
+    assert.deepEqual(requests[0].texts, [noteProjection, "Record the aligner decision."], "the projection sits immediately before the user message");
+    assert(!noteProjection.includes("minimap2"));
+    assert.deepEqual(requests[1].texts, requests[0].texts, "the projection is frozen through a turn's tool loop");
+    assert.deepEqual(requests[2].texts.slice(0, requests[1].texts.length), requests[1].texts, "earlier projections keep their positions");
+    const recall = requests[2].texts.at(-2);
+    assert.deepEqual(projections(requests[2]), [noteProjection, recall], "the new note arrives in a projection before the new user message");
+    assert.match(recall, /Project: sdk-fixture\./);
     assert.match(recall, /\[project:sdk-fixture; tx \d+; fixture:aligner design:decision\] The fixture aligner is minimap2\./);
     assert.equal(requests[2].texts.at(-1), "Which aligner does the fixture use?");
-    assert(session.messages.every((message) => message.role !== "custom"), "the projection is request-local and is not stored in the session");
+    assert(session.messages.every((message) => message.role !== "custom"), "projections are not stored as session messages");
+    const stored = () => sessionManager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "pi-memory-projection-v1");
+    assert.equal(stored().length, 2, "each delivered projection is recorded on the branch for replay");
 
     await session.prompt("Which aligner does the fixture use?");
     assert.equal(requests.length, 4);
-    assert.deepEqual(requests[3].texts.slice(0, requests[2].texts.length), requests[2].texts,
-      "an unchanged fresh snapshot retains its earlier position across user turns");
-    assert.equal(requests[3].texts.filter((entry) => entry.includes("<memory_projection")).length, 1);
+    assert.deepEqual(requests[3].texts.slice(0, requests[2].texts.length), requests[2].texts, "unchanged memory adds no projection and moves none");
+    assert.equal(projections(requests[3]).length, 2);
+    assert.equal(stored().length, 2);
     assert.equal(requests[3].systemPrompt, requests[2].systemPrompt);
     assert(session.messages.every((message) => message.role !== "custom"));
 

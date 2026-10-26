@@ -210,6 +210,15 @@ export class MemoryDatabase {
     });
   }
 
+  /** Current notes that replace any of `stanzas` in the same subject/predicate slot. */
+  async replacements(stanzas: readonly string[], asOf?: string | number, graph?: string): Promise<Row[]> {
+    if (!stanzas.length) return [];
+    return this.serial(async () => {
+      await this.setContextOn(this.connection, asOf, DEFAULT_LINE_BUDGET, graph);
+      return (await rows(this.connection, operations.slot_replacements, [JSON.stringify(stanzas)])).map(jsonSafeRow);
+    });
+  }
+
   async status(asOf?: string | number, graph?: string): Promise<MemoryStatus> {
     return this.serial(async () => {
       const snapshot = await this.setContextOn(this.connection, asOf, DEFAULT_LINE_BUDGET, graph);

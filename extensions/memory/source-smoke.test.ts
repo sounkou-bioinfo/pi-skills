@@ -23,7 +23,7 @@ export default function memorySourceSmoke(pi: ExtensionAPI): void {
           await db.note({ graph: active.graph, text: "Loader-scoped sentinel." });
           await db.note({ graph: GLOBAL_GRAPH, text: "Shared loader preference." });
           await db.note({ graph: "project:foreign", text: "Foreign loader sentinel." });
-          const projection = await buildTurnProjection(db, "source", "loader", active);
+          const projection = await buildTurnProjection(db, "loader", active);
           assert.match(projection.text, /Loader-scoped sentinel/);
           assert.match(projection.text, /Shared loader preference/);
           assert.doesNotMatch(projection.text, /Foreign loader sentinel/);

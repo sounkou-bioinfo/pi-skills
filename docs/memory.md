@@ -62,24 +62,35 @@ Keep source observations distinct from claims about installed/loaded artifacts.
   traversal views. Raw `memo.*` relations remain available for explicit cross-scope
   audits; they are not scope-filtered. SELECT-only execution is not row-level ACL.
 
-Automatic context shares one budget: at most eight distinct current records and
-12 KiB total, including global/current project records and task matches. FTS uses
-a shared corpus but scope/current-slot filtering precedes ordering and limits.
-Oversized collections omit whole records with an explicit notice. Superseded
-versions, legacy records and other projects are not injected automatically.
-Current slots can still contain stale beliefs: task-dependent verification matters.
+Automatic context arrives as projections. Each projection selects up to eight
+current records (global, current project, and task matches) plus current
+replacements for records shown earlier, within 12 KiB. FTS uses a shared corpus
+but scope/current-slot filtering precedes ordering and limits. Oversized
+collections omit whole records with an explicit notice; omitted records can
+appear in a later projection. Superseded versions, legacy records and other
+projects are not injected automatically. Current slots can still contain stale
+beliefs: task-dependent verification matters.
 
-The projection is frozen while its user-turn/task inputs stay unchanged. A new
-user turn or changed goal text refreshes it; a project/cwd/override change
-invalidates it. A tool invocation refreshes identity
-and recorded checkout metadata; a detected project change also invalidates the
-projection. Out-of-band Git changes without a tool call are seen at the next turn.
-No claim of continuous filesystem monitoring or loaded-runtime detection is made.
+A projection is added only on the first request of a user turn, immediately
+before that user message, and only when it carries something new: a record the
+branch has not shown for the active project, or a different project. Records
+already shown are not repeated. When a later note replaces a shown record's
+subject and predicate, the replacement leads the next projection, and the text
+tells the model that the later record replaces the earlier one. Notes written
+during a turn appear on the next user turn. Identity is resolved when a
+projection is built and on each tool invocation; out-of-band Git changes without
+a tool call are seen at the next turn. No claim of continuous filesystem
+monitoring or loaded-runtime detection is made.
 
-A byte-identical refreshed snapshot keeps its original user-message anchor while
-that message remains unchanged at the recorded position. A changed snapshot or
-an edited/missing anchor places the single current snapshot before the latest
-user message. Earlier snapshots are not retained to manufacture cache hits.
+Delivered projections never change or move, so provider prompt caches and
+Claude's preserved thinking stay valid across turns. Each is recorded as a
+`pi-memory-projection-v1` custom entry on the session branch, with its
+transaction, recorded checkout and FTS query, and replays byte-identically after
+reload or tree navigation. These entries are not model messages, and the
+model-visible text omits the transaction and checkout receipts. A projection
+whose user message is edited, removed or compacted is no longer sent, and its
+records become eligible again. Session files therefore contain delivered memory
+text.
 
 ## Existing databases and older sessions
 
