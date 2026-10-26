@@ -7,7 +7,8 @@
     "0002-normalize-tool-call-ids.patch",
     "0003-cache-request-boundary.patch",
     "0004-stable-initial-reminders.patch",
-    "0005-anchor-native-query-context.patch"
+    "0005-anchor-native-query-context.patch",
+    "0006-drop-foreign-thinking.patch"
   ],
   "overlays": [
     "UPSTREAM.md"

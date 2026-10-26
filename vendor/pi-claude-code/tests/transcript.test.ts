@@ -103,6 +103,51 @@ test("normalizes cross-provider tool IDs and preserves result linkage", () => {
   assert.equal((assistant.content[0] as { id: string }).id, sourceId);
 });
 
+test("replays thinking only from Anthropic producers across provider switches", () => {
+  const reasoning = { type: "reasoning", id: "rs_1", encrypted_content: "opaque", summary: [{ type: "summary_text", text: "Plan: read a." }] };
+  const codex: AssistantMessage = {
+    role: "assistant",
+    api: "openai-codex-responses",
+    provider: "openai-codex",
+    model: "gpt-6-sol",
+    content: [
+      { type: "thinking", thinking: "Plan: read a.", thinkingSignature: JSON.stringify(reasoning) },
+      { type: "thinking", thinking: "hidden", thinkingSignature: "opaque", redacted: true },
+      { type: "text", text: "Reading a." },
+      { type: "toolCall", id: "call_1|fc_1", name: "read", arguments: { path: "a" } },
+    ],
+    usage,
+    stopReason: "toolUse",
+    timestamp: 1,
+  };
+  const anthropic: AssistantMessage = {
+    role: "assistant",
+    api: "anthropic-messages",
+    provider: "anthropic",
+    model: "claude-opus-5-5",
+    content: [
+      { type: "thinking", thinking: "a is read", thinkingSignature: "anthropic-signed" },
+      { type: "text", text: "Done." },
+    ],
+    usage,
+    stopReason: "stop",
+    timestamp: 3,
+  };
+  const frames = prepareFrames([
+    { role: "user", content: "inspect", timestamp: 0 },
+    codex,
+    { role: "toolResult", toolCallId: "call_1|fc_1", toolName: "read", content: [{ type: "text", text: "A" }], isError: false, timestamp: 2 },
+    anthropic,
+    { role: "user", content: "continue on Claude", timestamp: 4 },
+  ]);
+
+  assert.deepEqual(frames[1]?.message.content.map((block) => (block as { type: string }).type), ["text", "tool_use"]);
+  assert.deepEqual(frames[3]?.message.content, [
+    { type: "thinking", thinking: "a is read", signature: "anthropic-signed" },
+    { type: "text", text: "Done." },
+  ]);
+});
+
 test("replays native signed blocks only while the visible projection is unchanged", () => {
   const assistant: AssistantMessage = {
     role: "assistant",

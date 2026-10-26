@@ -1,0 +1,89 @@
+diff --git a/src/transcript.ts b/src/transcript.ts
+index 01dd8ae..574622e 100644
+--- a/src/transcript.ts
++++ b/src/transcript.ts
+@@ -13,7 +13,7 @@ import {
+   type Tool,
+   type ToolResultMessage,
+ } from "@earendil-works/pi-ai";
+-import { supportsAdaptiveThinking } from "./model-catalog.ts";
++import { API_ID, PROVIDER_ID, supportsAdaptiveThinking } from "./model-catalog.ts";
+ import type { NativeContentBlock, NativeFrame, NativeMessage, NativeQueryPrefix } from "./native-types.ts";
+ 
+ export const TOOL_PREFIX = "mcp__pi__";
+@@ -146,12 +146,18 @@ function toolResultContent(message: ToolResultMessage): string | unknown[] {
+   );
+ }
+ 
++/** Only Anthropic Messages producers sign thinking Claude can verify; other providers' reasoning is dropped. */
++function hasAnthropicThinking(message: AssistantMessage): boolean {
++  return message.provider === PROVIDER_ID || message.api === API_ID || message.api === "anthropic-messages";
++}
++
+ function canonicalAssistantContent(message: AssistantMessage): NativeContentBlock[] {
+   const blocks: NativeContentBlock[] = [];
++  const replayThinking = hasAnthropicThinking(message);
+   for (const block of message.content) {
+     if (block.type === "text" && block.text.trim()) {
+       blocks.push({ type: "text", text: sanitizeSurrogates(block.text) });
+-    } else if (block.type === "thinking" && block.thinking.trim() && block.thinkingSignature) {
++    } else if (block.type === "thinking" && replayThinking && block.thinking.trim() && block.thinkingSignature) {
+       if (block.redacted) {
+         blocks.push({ type: "redacted_thinking", data: block.thinkingSignature });
+       } else {
+diff --git a/tests/transcript.test.ts b/tests/transcript.test.ts
+index 59ee271..a4eab1b 100644
+--- a/tests/transcript.test.ts
++++ b/tests/transcript.test.ts
+@@ -103,6 +103,51 @@ test("normalizes cross-provider tool IDs and preserves result linkage", () => {
+   assert.equal((assistant.content[0] as { id: string }).id, sourceId);
+ });
+ 
++test("replays thinking only from Anthropic producers across provider switches", () => {
++  const reasoning = { type: "reasoning", id: "rs_1", encrypted_content: "opaque", summary: [{ type: "summary_text", text: "Plan: read a." }] };
++  const codex: AssistantMessage = {
++    role: "assistant",
++    api: "openai-codex-responses",
++    provider: "openai-codex",
++    model: "gpt-6-sol",
++    content: [
++      { type: "thinking", thinking: "Plan: read a.", thinkingSignature: JSON.stringify(reasoning) },
++      { type: "thinking", thinking: "hidden", thinkingSignature: "opaque", redacted: true },
++      { type: "text", text: "Reading a." },
++      { type: "toolCall", id: "call_1|fc_1", name: "read", arguments: { path: "a" } },
++    ],
++    usage,
++    stopReason: "toolUse",
++    timestamp: 1,
++  };
++  const anthropic: AssistantMessage = {
++    role: "assistant",
++    api: "anthropic-messages",
++    provider: "anthropic",
++    model: "claude-opus-5-5",
++    content: [
++      { type: "thinking", thinking: "a is read", thinkingSignature: "anthropic-signed" },
++      { type: "text", text: "Done." },
++    ],
++    usage,
++    stopReason: "stop",
++    timestamp: 3,
++  };
++  const frames = prepareFrames([
++    { role: "user", content: "inspect", timestamp: 0 },
++    codex,
++    { role: "toolResult", toolCallId: "call_1|fc_1", toolName: "read", content: [{ type: "text", text: "A" }], isError: false, timestamp: 2 },
++    anthropic,
++    { role: "user", content: "continue on Claude", timestamp: 4 },
++  ]);
++
++  assert.deepEqual(frames[1]?.message.content.map((block) => (block as { type: string }).type), ["text", "tool_use"]);
++  assert.deepEqual(frames[3]?.message.content, [
++    { type: "thinking", thinking: "a is read", signature: "anthropic-signed" },
++    { type: "text", text: "Done." },
++  ]);
++});
++
+ test("replays native signed blocks only while the visible projection is unchanged", () => {
+   const assistant: AssistantMessage = {
+     role: "assistant",

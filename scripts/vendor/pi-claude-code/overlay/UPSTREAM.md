@@ -46,6 +46,14 @@ prefix blocks. Restoration requires the anchor to match; repeated copies are
 removed from later requests. Native instructions retain their historical
 position, and edited or absent anchors do not receive stale context.
 
+[0006-drop-foreign-thinking.patch](../../scripts/vendor/pi-claude-code/patches/0006-drop-foreign-thinking.patch)
+replays signed and redacted thinking only from Anthropic Messages producers:
+this provider and Pi's `anthropic-messages` API. Reasoning from other providers,
+such as OpenAI encrypted reasoning items stored as thinking signatures, is
+dropped deterministically, as pi-ai's cross-provider transform does; their text
+and tool calls are kept. Claude rejects an undecryptable thinking signature, so
+a session that switches from GPT to Claude Code would otherwise fail.
+
 This provenance file comes from the [overlay](../../scripts/vendor/pi-claude-code/overlay/UPSTREAM.md).
 Edit the manifest, ordered patches, or overlay inputs, not generated files under
 `vendor/pi-claude-code/`. There are no install-time patches or downloads.

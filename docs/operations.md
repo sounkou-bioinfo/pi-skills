@@ -68,6 +68,12 @@ statistics. Restoration requires recorded metadata and cannot reconstruct
 unrecorded native context. [Bounded Haiku verification](claude-cache-verification.md)
 records the live checks and their limits.
 
+A session can switch to Claude Code from another provider. Historical tool-call
+identifiers are normalized for Claude, and other providers' reasoning is dropped
+rather than replayed; thinking signed by this provider or Pi's
+`anthropic-messages` API is replayed unchanged. Provider caches are per model,
+so the first Claude request after a switch writes a new cache entry.
+
 The snapshot is pinned and generated from a [manifest, patches, and overlay](../scripts/vendor/pi-claude-code/manifest.json).
 Updates are explicit maintenance operations; installation and reload do not
 fetch upstream source or apply patches.

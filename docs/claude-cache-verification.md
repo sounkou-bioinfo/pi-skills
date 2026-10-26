@@ -66,13 +66,14 @@ published. These are bounded live checks, not default automated tests.
 
 ## Automated coverage and limits
 
-`npm run test:claude-code` runs 22 offline fixtures, a locked upstream typecheck,
+`npm run test:claude-code` runs 23 offline fixtures, a locked upstream typecheck,
 patch replay/drift rejection, clean tarball installation, and host loading.
 The composed CLI/loopback fixture checks both active-user startup prefixes and
 moving tool-result suffixes through worker replacement and warm continuation.
 It compares the actual upstream body with payload-hook output. Other fixtures
 cover legacy snapshots, edited/missing anchors, carrier serialization, signed
-blocks, marker budgeting, and cancellation.
+blocks, other providers' reasoning after a switch, marker budgeting, and
+cancellation.
 
 Live provider-reported usage establishes cache reads for these Haiku requests.
 It does not establish subscription-quota savings, billing eligibility for other

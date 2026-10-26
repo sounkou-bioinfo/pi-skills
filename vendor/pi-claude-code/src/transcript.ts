@@ -13,7 +13,7 @@ import {
   type Tool,
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
-import { supportsAdaptiveThinking } from "./model-catalog.ts";
+import { API_ID, PROVIDER_ID, supportsAdaptiveThinking } from "./model-catalog.ts";
 import type { NativeContentBlock, NativeFrame, NativeMessage, NativeQueryPrefix } from "./native-types.ts";
 
 export const TOOL_PREFIX = "mcp__pi__";
@@ -146,12 +146,18 @@ function toolResultContent(message: ToolResultMessage): string | unknown[] {
   );
 }
 
+/** Only Anthropic Messages producers sign thinking Claude can verify; other providers' reasoning is dropped. */
+function hasAnthropicThinking(message: AssistantMessage): boolean {
+  return message.provider === PROVIDER_ID || message.api === API_ID || message.api === "anthropic-messages";
+}
+
 function canonicalAssistantContent(message: AssistantMessage): NativeContentBlock[] {
   const blocks: NativeContentBlock[] = [];
+  const replayThinking = hasAnthropicThinking(message);
   for (const block of message.content) {
     if (block.type === "text" && block.text.trim()) {
       blocks.push({ type: "text", text: sanitizeSurrogates(block.text) });
-    } else if (block.type === "thinking" && block.thinking.trim() && block.thinkingSignature) {
+    } else if (block.type === "thinking" && replayThinking && block.thinking.trim() && block.thinkingSignature) {
       if (block.redacted) {
         blocks.push({ type: "redacted_thinking", data: block.thinkingSignature });
       } else {

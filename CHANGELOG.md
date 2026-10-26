@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Drop other providers' reasoning when replaying history through Claude Code. Signed and redacted thinking is replayed only from Claude Code and Pi's `anthropic-messages` API; OpenAI encrypted reasoning previously reached Claude as an invalid thinking signature, so switching a session from GPT to Claude Code failed.
 - **Claude replay prefix stability** — Place native environment/date reminders before the initial request is cached. Preserve startup context at the user message that first triggered inference, with an ordinal/content-hash guard for edited or missing anchors. Cover initial handoff, tool-worker replacement, warm continuation, legacy snapshots, carrier serialization, and the loopback request boundary.
 
 - Budget Claude replay caching across tools, system and messages with at most four explicit markers. Run Pi's asynchronous payload hook on the rewritten relay request and prevent forwarding on hook rejection or cancellation. Cover process reuse and the final forwarded body with offline CLI/HTTP fixtures.
