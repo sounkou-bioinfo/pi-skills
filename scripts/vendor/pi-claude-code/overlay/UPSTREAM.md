@@ -46,6 +46,21 @@ contents, and updates take a cross-process lock. `default` restores the configur
 login. The process fingerprint includes the environment, so a switch starts a
 new Claude Code worker instead of reusing one logged in to another account.
 
+[0005-upstream-open-fixes.patch](../../scripts/vendor/pi-claude-code/patches/0005-upstream-open-fixes.patch)
+carries open upstream pull requests
+[#51](https://github.com/earendil-works/pi-claude-code/pull/51) at `5e7b25e`,
+[#39](https://github.com/earendil-works/pi-claude-code/pull/39) at `731542f`, and
+[#56](https://github.com/earendil-works/pi-claude-code/pull/56) at `b21cab8`.
+Replayed same-model assistant frames carry the model that answered, so Claude
+Code keeps their signed thinking instead of re-reasoning each step
+([#52](https://github.com/earendil-works/pi-claude-code/issues/52)); after a
+model switch, thinking is dropped before tagging. As in pi-ai, aborted and
+errored assistant turns are skipped, and retained tool calls without results
+receive an error result before replay
+([#49](https://github.com/earendil-works/pi-claude-code/issues/49)). An
+`api_error` or `overloaded_error` event inside a 200 stream is retryable. Drop
+this patch when upstream merges or supersedes those pull requests.
+
 Upstream covers host-mapped model-catalog imports, signed-thinking provenance,
 and rebuilding user messages from Pi history without native startup reminders.
 

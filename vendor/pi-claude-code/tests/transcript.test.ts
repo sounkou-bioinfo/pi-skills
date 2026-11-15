@@ -64,6 +64,11 @@ test("prepares replay frames and groups tool results", () => {
   assert.equal(frames.length, 3);
   assert.equal(frames[0]?.shouldQuery, false);
   assert.equal(frames[1]?.type, "assistant");
+  // Claude Code strips signed thinking from turns whose model it can't confirm.
+  assert.equal(frames[1]?.message.model, "sonnet");
+  // The model that answered wins over the alias the turn was requested with.
+  const answered = prepareFrames(messages.with(2, { ...assistant, model: "default", responseModel: "claude-opus-5-5" }));
+  assert.equal(answered[1]?.message.model, "claude-opus-5-5");
   assert.equal((frames[1]?.message.content[2] as { id: string; name: string }).name, `${TOOL_PREFIX}read`);
   assert.equal((frames[1]?.message.content[2] as { id: string }).id, "t1");
   assert.equal(frames[2]?.message.content.length, 2);
@@ -301,6 +306,29 @@ test("keeps native replay only for the same model without changing the source hi
   assert.deepEqual(messages, original);
 });
 
+test("a model switch drops signed thinking before replay frames are tagged", () => {
+  const turn: AssistantMessage = {
+    role: "assistant", api: "claude-code", provider: "claude-code", model: "sonnet", responseModel: "claude-sonnet-5",
+    content: [{ type: "thinking", thinking: "why", thinkingSignature: "signed-by-sonnet" }, { type: "text", text: "done" }],
+    usage, stopReason: "stop", timestamp: 1,
+  };
+  const messages: Message[] = [
+    { role: "user", content: "go", timestamp: 0 },
+    turn,
+    { role: "user", content: "next", timestamp: 2 },
+  ];
+  const model = (id: string) => ({ id, api: "claude-code", provider: "claude-code", input: ["text"] }) as unknown as Model<any>;
+  const blockTypes = (frames: ReturnType<typeof prepareFrames>) =>
+    (frames[1]?.message.content as Array<{ type: string }>).map((block) => block.type);
+
+  const same = prepareFrames(prepareMessages(messages, model("sonnet")));
+  assert.deepEqual(blockTypes(same), ["thinking", "text"]);
+  assert.equal(same[1]?.message.model, "claude-sonnet-5");
+
+  const switched = prepareFrames(prepareMessages(messages, model("opus")));
+  assert.deepEqual(blockTypes(switched), ["text"], "another model's signature is never replayed");
+});
+
 test("foreign tool call ids that share a 64-character prefix stay distinct through replay", () => {
   const ids = ["A", "B"].map((suffix) => `call_${"x".repeat(70)}|fc_${suffix}`);
   const model = { id: "sonnet", api: "claude-code", provider: "claude-code", input: ["text"] } as unknown as Model<any>;
@@ -353,4 +381,58 @@ test("normalizes foreign tool call ids and drops foreign reasoning before replay
   assert.match(toolUse[1]!.id, /^[a-zA-Z0-9_-]{1,64}$/u);
   assert.equal((frames[2]?.message.content[0] as { tool_use_id: string }).tool_use_id, toolUse[1]!.id);
   assert.deepEqual(messages, original);
+});
+
+test("answers orphaned tool calls and skips aborted turns before replay", () => {
+  const model = { id: "sonnet", api: "claude-code", provider: "claude-code", input: ["text"] } as unknown as Model<any>;
+  const turn = (id: string, stopReason: AssistantMessage["stopReason"]): AssistantMessage => ({
+    role: "assistant",
+    api: "claude-code",
+    provider: "claude-code",
+    model: "sonnet",
+    content: [{ type: "toolCall", id, name: "read", arguments: { path: "a" } }],
+    usage,
+    stopReason,
+    timestamp: 1,
+  });
+  const messages: Message[] = [
+    { role: "user", content: "go", timestamp: 0 },
+    turn("orphan", "toolUse"),
+    { role: "user", content: "never mind", timestamp: 2 },
+    turn("aborted", "aborted"),
+    { role: "user", content: "continue", timestamp: 3 },
+  ];
+  const frames = prepareFrames(prepareMessages(messages, model));
+
+  assert.deepEqual(frames.map((frame) => frame.type), ["user", "assistant", "user"]);
+  const followUp = frames[2]!.message.content as Array<{ type: string; tool_use_id?: string; is_error?: boolean }>;
+  assert.equal(followUp[0]?.type, "tool_result");
+  assert.equal(followUp[0]?.tool_use_id, "orphan");
+  assert.equal(followUp[0]?.is_error, true);
+  assert.equal(JSON.stringify(frames).includes("aborted"), false);
+});
+
+test("holds a system message between a tool call and its result without duplicating the result", () => {
+  const model = { id: "sonnet", api: "claude-code", provider: "claude-code", input: ["text"] } as unknown as Model<any>;
+  const assistant: AssistantMessage = {
+    role: "assistant",
+    api: "claude-code",
+    provider: "claude-code",
+    model: "sonnet",
+    content: [{ type: "toolCall", id: "t1", name: "read", arguments: { path: "a" } }],
+    usage,
+    stopReason: "toolUse",
+    timestamp: 1,
+  };
+  const messages: Message[] = [
+    { role: "user", content: "go", timestamp: 0 },
+    assistant,
+    { role: "system", content: "update", timestamp: 2 },
+    { role: "toolResult", toolCallId: "t1", toolName: "read", content: [{ type: "text", text: "A" }], isError: false, timestamp: 3 },
+  ];
+  const prepared = prepareMessages(messages, model);
+
+  assert.deepEqual(prepared.map((message) => message.role), ["user", "assistant", "toolResult", "system"]);
+  assert.equal(prepared.filter((message) => message.role === "toolResult").length, 1);
+  assert.equal((prepared[2] as { isError: boolean }).isError, false);
 });

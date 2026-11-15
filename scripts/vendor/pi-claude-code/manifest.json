@@ -6,7 +6,8 @@
     "0001-normalize-tool-call-ids.patch",
     "0002-cache-request-boundary.patch",
     "0003-stable-initial-reminders.patch",
-    "0004-claude-accounts.patch"
+    "0004-claude-accounts.patch",
+    "0005-upstream-open-fixes.patch"
   ],
   "overlays": [
     "UPSTREAM.md"

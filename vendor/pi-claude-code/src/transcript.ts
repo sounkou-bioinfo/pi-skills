@@ -12,6 +12,7 @@ import {
   type SystemMessage,
   type TextContent,
   type Tool,
+  type ToolCall,
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import { supportsAdaptiveThinking, supportsDisabledThinking } from "./model-catalog.ts";
@@ -63,7 +64,7 @@ function nativeToolUseId(id: string): string {
 
 export function prepareMessages(messages: Message[], model: Model<any>): Message[] {
   const toolCallIds = new Map<string, string>();
-  return messages.map((message) => {
+  const normalized = messages.map((message): Message => {
     if (message.role === "toolResult") {
       const id = toolCallIds.get(message.toolCallId);
       return id && id !== message.toolCallId ? { ...message, toolCallId: id } : message;
@@ -89,6 +90,66 @@ export function prepareMessages(messages: Message[], model: Model<any>): Message
       }),
     };
   });
+  return answerOrphanedToolCalls(normalized);
+}
+
+// Copied from pi-ai's transformMessages (dist/api/transform-messages.js).
+function answerOrphanedToolCalls(transformed: Message[]): Message[] {
+  const result: Message[] = [];
+  let pendingToolCalls: ToolCall[] = [];
+  let existingToolResultIds = new Set<string>();
+  const heldSystemMessages: Message[] = [];
+  const closePendingToolCalls = () => {
+    if (pendingToolCalls.length > 0) {
+      for (const tc of pendingToolCalls) {
+        if (!existingToolResultIds.has(tc.id)) {
+          result.push({
+            role: "toolResult",
+            toolCallId: tc.id,
+            toolName: tc.name,
+            content: [{ type: "text", text: "No result provided" }],
+            isError: true,
+            timestamp: Date.now(),
+          });
+        }
+      }
+      pendingToolCalls = [];
+      existingToolResultIds = new Set();
+    }
+    result.push(...heldSystemMessages);
+    heldSystemMessages.length = 0;
+  };
+  for (let i = 0; i < transformed.length; i++) {
+    const msg = transformed[i]!;
+    if (msg.role === "assistant") {
+      closePendingToolCalls();
+      if (msg.stopReason === "error" || msg.stopReason === "aborted") {
+        continue;
+      }
+      const toolCalls = msg.content.filter((b): b is ToolCall => b.type === "toolCall");
+      if (toolCalls.length > 0) {
+        pendingToolCalls = toolCalls;
+        existingToolResultIds = new Set();
+      }
+      result.push(msg);
+    } else if (msg.role === "toolResult") {
+      existingToolResultIds.add(msg.toolCallId);
+      result.push(msg);
+    } else if (msg.role === "system") {
+      if (pendingToolCalls.length > 0) {
+        heldSystemMessages.push(msg);
+      } else {
+        result.push(msg);
+      }
+    } else if (msg.role === "user") {
+      closePendingToolCalls();
+      result.push(msg);
+    } else {
+      result.push(msg);
+    }
+  }
+  closePendingToolCalls();
+  return result;
 }
 
 function clone<T>(value: T): T {
@@ -217,6 +278,7 @@ export function prepareFrames(messages: Message[]): NativeFrame[] {
 
     let role: "user" | "assistant";
     let blocks: unknown[];
+    let model: string | undefined;
 
     if (message.role === "user") {
       role = "user";
@@ -224,6 +286,9 @@ export function prepareFrames(messages: Message[]): NativeFrame[] {
     } else if (message.role === "assistant") {
       role = "assistant";
       blocks = assistantContent(message);
+      // Claude Code strips signed thinking from replayed turns whose model it can't confirm.
+      // Prefer the model that answered: aliases like "default" can't be confirmed and may move.
+      model = message.responseModel ?? message.model;
     } else {
       role = "user";
       blocks = [
@@ -241,7 +306,7 @@ export function prepareFrames(messages: Message[]): NativeFrame[] {
     if (role === "user" && previous?.type === "user") {
       previous.message.content.push(...blocks);
     } else {
-      frames.push({ type: role, message: { role, content: blocks } });
+      frames.push({ type: role, message: { role, content: blocks, ...(model && { model }) } });
     }
   }
 

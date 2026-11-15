@@ -1,0 +1,401 @@
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+index 514cb03..f7f57e8 100644
+--- a/ARCHITECTURE.md
++++ b/ARCHITECTURE.md
+@@ -77,6 +77,15 @@ tool execution. In particular, it:
+   to the original. Workers also disable auto-memory and CLAUDE.md loading, so
+   those reminders are not created in the first place. If a request no longer
+   lines up with Pi's history, the turn fails rather than sending a guess;
++- relies on replayed assistant frames carrying the model that answered
++  (`responseModel`, recorded from `message_start`, else Pi's stored
++  `message.model`). Claude Code drops signed thinking from replayed turns it
++  cannot attribute to the running model (no tag, `default`, or another
++  model), so without the tag every step re-reasons from scratch. Because the
++  tag passes that filter, `prepareMessages` is the only guard against
++  replaying another model's signatures. Symptom if a future Claude Code
++  changes this: requests carry no thinking in their history and runs take
++  more, smaller steps;
+ - records Claude Code's initial native system messages (environment, date),
+   then restores their stable layout during full-history replay. It also adjusts
+   cache breakpoints so tool rounds do not continually invalidate the
+diff --git a/src/claude-cli.ts b/src/claude-cli.ts
+index fcdcd38..8afec77 100644
+--- a/src/claude-cli.ts
++++ b/src/claude-cli.ts
+@@ -624,6 +624,12 @@ async function writeFrame(child: ChildProcess, frame: NativeFrame): Promise<stri
+   return uuid;
+ }
+ 
++/**
++ * Anthropic error types that stand for a server-side failure (HTTP 500 and 529).
++ * Sent as an error event inside a 200 stream, they are as transient as the status.
++ */
++const SERVER_STREAM_ERROR_TYPES = new Set(["api_error", "overloaded_error"]);
++
+ /** True when the result names user messages and this turn's frame is not one of them. */
+ function resultIsForAnotherMessage(result: NativeResult, uuid: string): boolean {
+   const ids = result.user_message_uuids;
+@@ -928,7 +934,8 @@ function frameHistoryHash(frames: NativeFrame[]): string {
+   return digest(
+     frames.map((frame) => ({
+       type: frame.type,
+-      message: frame.message,
++      // Allowlist: commit() builds its frame without the replay-only model tag; add new frame fields here too.
++      message: { role: frame.message.role, content: frame.message.content },
+     })),
+   );
+ }
+@@ -1217,8 +1224,13 @@ class ClaudeProcess {
+             // The connection to Anthropic failed before any response status.
+             throw new Error(`Claude Code upstream connection lost before a response (${detail})`);
+           }
+-          if (this.relay.status !== undefined && this.relay.status >= 500) {
+-            // 5xx such as 529 (overloaded) are transient regardless of the body.
++          const streamErrorType = this.relay.capture.errorType;
++          if (
++            (this.relay.status !== undefined && this.relay.status >= 500) ||
++            (streamErrorType !== undefined && SERVER_STREAM_ERROR_TYPES.has(streamErrorType))
++          ) {
++            // 5xx such as 529 (overloaded) are transient regardless of the body, and so
++            // is the same failure reported as an error event in a 200 stream.
+             throw new Error(`Claude Code upstream server error (${detail})`);
+           }
+           throw new Error(`Incomplete Claude Code upstream response (${detail})`);
+diff --git a/src/native-types.ts b/src/native-types.ts
+index bcf0c91..0bc3f10 100644
+--- a/src/native-types.ts
++++ b/src/native-types.ts
+@@ -19,6 +19,7 @@ export interface NativeUsage extends JsonRecord {
+ 
+ export interface NativeMessage extends JsonRecord {
+   id?: string;
++  model?: string;
+   role: "assistant";
+   content: NativeContentBlock[];
+   usage?: NativeUsage;
+@@ -37,6 +38,7 @@ export interface NativeFrame {
+   message: {
+     role: "user" | "assistant";
+     content: unknown[];
++    model?: string;
+   };
+   shouldQuery?: false;
+ }
+diff --git a/src/stream.ts b/src/stream.ts
+index 529f17f..86d328d 100644
+--- a/src/stream.ts
++++ b/src/stream.ts
+@@ -168,6 +168,7 @@ class EventTranslator {
+     switch (event.type) {
+       case "message_start":
+         if (event.message.id) this.output.responseId = event.message.id;
++        if (event.message.model && event.message.model !== this.model.id) this.output.responseModel = event.message.model;
+         updateUsage(this.output, this.model, event.message.usage);
+         break;
+       case "content_block_start":
+diff --git a/src/transcript.ts b/src/transcript.ts
+index 098972e..3c175da 100644
+--- a/src/transcript.ts
++++ b/src/transcript.ts
+@@ -12,6 +12,7 @@ import {
+   type SystemMessage,
+   type TextContent,
+   type Tool,
++  type ToolCall,
+   type ToolResultMessage,
+ } from "@earendil-works/pi-ai";
+ import { supportsAdaptiveThinking, supportsDisabledThinking } from "./model-catalog.ts";
+@@ -63,7 +64,7 @@ function nativeToolUseId(id: string): string {
+ 
+ export function prepareMessages(messages: Message[], model: Model<any>): Message[] {
+   const toolCallIds = new Map<string, string>();
+-  return messages.map((message) => {
++  const normalized = messages.map((message): Message => {
+     if (message.role === "toolResult") {
+       const id = toolCallIds.get(message.toolCallId);
+       return id && id !== message.toolCallId ? { ...message, toolCallId: id } : message;
+@@ -89,6 +90,66 @@ export function prepareMessages(messages: Message[], model: Model<any>): Message
+       }),
+     };
+   });
++  return answerOrphanedToolCalls(normalized);
++}
++
++// Copied from pi-ai's transformMessages (dist/api/transform-messages.js).
++function answerOrphanedToolCalls(transformed: Message[]): Message[] {
++  const result: Message[] = [];
++  let pendingToolCalls: ToolCall[] = [];
++  let existingToolResultIds = new Set<string>();
++  const heldSystemMessages: Message[] = [];
++  const closePendingToolCalls = () => {
++    if (pendingToolCalls.length > 0) {
++      for (const tc of pendingToolCalls) {
++        if (!existingToolResultIds.has(tc.id)) {
++          result.push({
++            role: "toolResult",
++            toolCallId: tc.id,
++            toolName: tc.name,
++            content: [{ type: "text", text: "No result provided" }],
++            isError: true,
++            timestamp: Date.now(),
++          });
++        }
++      }
++      pendingToolCalls = [];
++      existingToolResultIds = new Set();
++    }
++    result.push(...heldSystemMessages);
++    heldSystemMessages.length = 0;
++  };
++  for (let i = 0; i < transformed.length; i++) {
++    const msg = transformed[i]!;
++    if (msg.role === "assistant") {
++      closePendingToolCalls();
++      if (msg.stopReason === "error" || msg.stopReason === "aborted") {
++        continue;
++      }
++      const toolCalls = msg.content.filter((b): b is ToolCall => b.type === "toolCall");
++      if (toolCalls.length > 0) {
++        pendingToolCalls = toolCalls;
++        existingToolResultIds = new Set();
++      }
++      result.push(msg);
++    } else if (msg.role === "toolResult") {
++      existingToolResultIds.add(msg.toolCallId);
++      result.push(msg);
++    } else if (msg.role === "system") {
++      if (pendingToolCalls.length > 0) {
++        heldSystemMessages.push(msg);
++      } else {
++        result.push(msg);
++      }
++    } else if (msg.role === "user") {
++      closePendingToolCalls();
++      result.push(msg);
++    } else {
++      result.push(msg);
++    }
++  }
++  closePendingToolCalls();
++  return result;
+ }
+ 
+ function clone<T>(value: T): T {
+@@ -217,6 +278,7 @@ export function prepareFrames(messages: Message[]): NativeFrame[] {
+ 
+     let role: "user" | "assistant";
+     let blocks: unknown[];
++    let model: string | undefined;
+ 
+     if (message.role === "user") {
+       role = "user";
+@@ -224,6 +286,9 @@ export function prepareFrames(messages: Message[]): NativeFrame[] {
+     } else if (message.role === "assistant") {
+       role = "assistant";
+       blocks = assistantContent(message);
++      // Claude Code strips signed thinking from replayed turns whose model it can't confirm.
++      // Prefer the model that answered: aliases like "default" can't be confirmed and may move.
++      model = message.responseModel ?? message.model;
+     } else {
+       role = "user";
+       blocks = [
+@@ -241,7 +306,7 @@ export function prepareFrames(messages: Message[]): NativeFrame[] {
+     if (role === "user" && previous?.type === "user") {
+       previous.message.content.push(...blocks);
+     } else {
+-      frames.push({ type: role, message: { role, content: blocks } });
++      frames.push({ type: role, message: { role, content: blocks, ...(model && { model }) } });
+     }
+   }
+ 
+diff --git a/src/turn-relay.ts b/src/turn-relay.ts
+index 87cfce5..9de4cf4 100644
+--- a/src/turn-relay.ts
++++ b/src/turn-relay.ts
+@@ -13,6 +13,8 @@ export class AnthropicCapture {
+   complete = false;
+   /** Error reported inside an otherwise successful (HTTP 200) event stream. */
+   error?: string;
++  /** The `error.type` of that stream error, such as `overloaded_error`. */
++  errorType?: string;
+   private pending = "";
+   private readonly decoder = new TextDecoder();
+   private readonly argumentsByIndex = new Map<number, string>();
+@@ -88,6 +90,7 @@ export class AnthropicCapture {
+         break;
+       case "error": {
+         const { type, message } = event.error ?? {};
++        this.errorType = type;
+         this.error = [type, message].filter(Boolean).join(": ") || "unknown stream error";
+         break;
+       }
+diff --git a/tests/claude-cli.test.ts b/tests/claude-cli.test.ts
+index 64ce97e..665f83c 100644
+--- a/tests/claude-cli.test.ts
++++ b/tests/claude-cli.test.ts
+@@ -595,7 +595,8 @@ for await (const line of input) {
+           message: { role: "user", content: [{ type: "text", text: "one" }] },
+           shouldQuery: false,
+         },
+-        { type: "assistant", message: { role: "assistant", content: first.message.content } },
++        // prepareFrames tags replayed turns with their model; that must not break continuation.
++        { type: "assistant", message: { role: "assistant", content: first.message.content, model: "opus" } },
+         { type: "user", message: { role: "user", content: [{ type: "text", text: "two" }] } },
+       ],
+     });
+@@ -1033,3 +1034,29 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
+   }
+ });
+ 
++test("reports a transient upstream stream error as retryable and keeps others non-retryable", async () => {
++  // Anthropic answers 200, starts streaming, then sends an error event instead of message_stop.
++  const streamError = (type: string, message: string) =>
++    failingUpstreamTurn(async (request, response) => {
++      for await (const _chunk of request);
++      response.writeHead(200, { "content-type": "text/event-stream" });
++      const usage = { input_tokens: 2, output_tokens: 0 };
++      response.write(
++        `event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { id: "m1", role: "assistant", content: [], usage } })}\n\n`,
++      );
++      response.end(`event: error\ndata: ${JSON.stringify({ type: "error", error: { type, message } })}\n\n`);
++    });
++
++  const apiError = await streamError("api_error", "Unable to complete this request right now. Please try again.");
++  assert.match(apiError.message, /upstream server error \(status 200, capture incomplete/);
++  assert.match(apiError.message, /upstream said: api_error: Unable to complete this request/);
++  assert.equal(apiError.retryable, true);
++
++  const overloaded = await streamError("overloaded_error", "Overloaded");
++  assert.match(overloaded.message, /upstream server error \(status 200/);
++  assert.equal(overloaded.retryable, true);
++
++  const invalid = await streamError("invalid_request_error", "bad request");
++  assert.match(invalid.message, /Incomplete Claude Code upstream response \(status 200.*upstream said: invalid_request_error: bad request/);
++  assert.equal(invalid.retryable, false);
++});
+diff --git a/tests/stream.test.ts b/tests/stream.test.ts
+index 0f85bd5..62e92cd 100644
+--- a/tests/stream.test.ts
++++ b/tests/stream.test.ts
+@@ -29,7 +29,7 @@ for await (const line of input) {
+   const usage = {input_tokens: 3, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0};
+   const content = [{type: "tool_use", id: "tool_fake", name: "mcp__pi__aggregate_rum_events", input: {query: "*"}}];
+   const events = [
+-    {type: "message_start", message: {id: "m_fake", role: "assistant", content: [], usage}},
++    {type: "message_start", message: {id: "m_fake", model: "claude-opus-5-6", role: "assistant", content: [], usage}},
+     {type: "content_block_start", index: 0, content_block: {type: "tool_use", id: "tool_fake", name: "mcp__pi__aggregate_rum_events", input: {}}},
+     {type: "content_block_delta", index: 0, delta: {type: "input_json_delta", partial_json: '{"query":"*"}'}},
+     {type: "content_block_stop", index: 0},
+@@ -58,6 +58,8 @@ for await (const line of input) {
+     );
+     const message = await stream.result();
+     assert.equal(message.stopReason, "toolUse", message.errorMessage);
++    // Replay tags turns with the model that answered, not the requested alias.
++    assert.equal(message.responseModel, "claude-opus-5-6");
+     assert.deepEqual(
+       message.content.map((block) => (block.type === "toolCall" ? [block.name, block.arguments] : block.type)),
+       [["aggregate_rum_events", { query: "*" }]],
+diff --git a/tests/transcript.test.ts b/tests/transcript.test.ts
+index 5b1360c..1cfcb31 100644
+--- a/tests/transcript.test.ts
++++ b/tests/transcript.test.ts
+@@ -64,6 +64,11 @@ test("prepares replay frames and groups tool results", () => {
+   assert.equal(frames.length, 3);
+   assert.equal(frames[0]?.shouldQuery, false);
+   assert.equal(frames[1]?.type, "assistant");
++  // Claude Code strips signed thinking from turns whose model it can't confirm.
++  assert.equal(frames[1]?.message.model, "sonnet");
++  // The model that answered wins over the alias the turn was requested with.
++  const answered = prepareFrames(messages.with(2, { ...assistant, model: "default", responseModel: "claude-opus-5-5" }));
++  assert.equal(answered[1]?.message.model, "claude-opus-5-5");
+   assert.equal((frames[1]?.message.content[2] as { id: string; name: string }).name, `${TOOL_PREFIX}read`);
+   assert.equal((frames[1]?.message.content[2] as { id: string }).id, "t1");
+   assert.equal(frames[2]?.message.content.length, 2);
+@@ -301,6 +306,29 @@ test("keeps native replay only for the same model without changing the source hi
+   assert.deepEqual(messages, original);
+ });
+ 
++test("a model switch drops signed thinking before replay frames are tagged", () => {
++  const turn: AssistantMessage = {
++    role: "assistant", api: "claude-code", provider: "claude-code", model: "sonnet", responseModel: "claude-sonnet-5",
++    content: [{ type: "thinking", thinking: "why", thinkingSignature: "signed-by-sonnet" }, { type: "text", text: "done" }],
++    usage, stopReason: "stop", timestamp: 1,
++  };
++  const messages: Message[] = [
++    { role: "user", content: "go", timestamp: 0 },
++    turn,
++    { role: "user", content: "next", timestamp: 2 },
++  ];
++  const model = (id: string) => ({ id, api: "claude-code", provider: "claude-code", input: ["text"] }) as unknown as Model<any>;
++  const blockTypes = (frames: ReturnType<typeof prepareFrames>) =>
++    (frames[1]?.message.content as Array<{ type: string }>).map((block) => block.type);
++
++  const same = prepareFrames(prepareMessages(messages, model("sonnet")));
++  assert.deepEqual(blockTypes(same), ["thinking", "text"]);
++  assert.equal(same[1]?.message.model, "claude-sonnet-5");
++
++  const switched = prepareFrames(prepareMessages(messages, model("opus")));
++  assert.deepEqual(blockTypes(switched), ["text"], "another model's signature is never replayed");
++});
++
+ test("foreign tool call ids that share a 64-character prefix stay distinct through replay", () => {
+   const ids = ["A", "B"].map((suffix) => `call_${"x".repeat(70)}|fc_${suffix}`);
+   const model = { id: "sonnet", api: "claude-code", provider: "claude-code", input: ["text"] } as unknown as Model<any>;
+@@ -354,3 +382,57 @@ test("normalizes foreign tool call ids and drops foreign reasoning before replay
+   assert.equal((frames[2]?.message.content[0] as { tool_use_id: string }).tool_use_id, toolUse[1]!.id);
+   assert.deepEqual(messages, original);
+ });
++
++test("answers orphaned tool calls and skips aborted turns before replay", () => {
++  const model = { id: "sonnet", api: "claude-code", provider: "claude-code", input: ["text"] } as unknown as Model<any>;
++  const turn = (id: string, stopReason: AssistantMessage["stopReason"]): AssistantMessage => ({
++    role: "assistant",
++    api: "claude-code",
++    provider: "claude-code",
++    model: "sonnet",
++    content: [{ type: "toolCall", id, name: "read", arguments: { path: "a" } }],
++    usage,
++    stopReason,
++    timestamp: 1,
++  });
++  const messages: Message[] = [
++    { role: "user", content: "go", timestamp: 0 },
++    turn("orphan", "toolUse"),
++    { role: "user", content: "never mind", timestamp: 2 },
++    turn("aborted", "aborted"),
++    { role: "user", content: "continue", timestamp: 3 },
++  ];
++  const frames = prepareFrames(prepareMessages(messages, model));
++
++  assert.deepEqual(frames.map((frame) => frame.type), ["user", "assistant", "user"]);
++  const followUp = frames[2]!.message.content as Array<{ type: string; tool_use_id?: string; is_error?: boolean }>;
++  assert.equal(followUp[0]?.type, "tool_result");
++  assert.equal(followUp[0]?.tool_use_id, "orphan");
++  assert.equal(followUp[0]?.is_error, true);
++  assert.equal(JSON.stringify(frames).includes("aborted"), false);
++});
++
++test("holds a system message between a tool call and its result without duplicating the result", () => {
++  const model = { id: "sonnet", api: "claude-code", provider: "claude-code", input: ["text"] } as unknown as Model<any>;
++  const assistant: AssistantMessage = {
++    role: "assistant",
++    api: "claude-code",
++    provider: "claude-code",
++    model: "sonnet",
++    content: [{ type: "toolCall", id: "t1", name: "read", arguments: { path: "a" } }],
++    usage,
++    stopReason: "toolUse",
++    timestamp: 1,
++  };
++  const messages: Message[] = [
++    { role: "user", content: "go", timestamp: 0 },
++    assistant,
++    { role: "system", content: "update", timestamp: 2 },
++    { role: "toolResult", toolCallId: "t1", toolName: "read", content: [{ type: "text", text: "A" }], isError: false, timestamp: 3 },
++  ];
++  const prepared = prepareMessages(messages, model);
++
++  assert.deepEqual(prepared.map((message) => message.role), ["user", "assistant", "toolResult", "system"]);
++  assert.equal(prepared.filter((message) => message.role === "toolResult").length, 1);
++  assert.equal((prepared[2] as { isError: boolean }).isError, false);
++});
