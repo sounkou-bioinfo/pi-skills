@@ -7,14 +7,15 @@ import {
   type AssistantMessage,
   type ImageContent,
   type Message,
+  type Model,
   type SimpleStreamOptions,
   type SystemMessage,
   type TextContent,
   type Tool,
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
-import { API_ID, PROVIDER_ID, supportsAdaptiveThinking } from "./model-catalog.ts";
-import type { NativeContentBlock, NativeFrame, NativeMessage, NativeQueryPrefix } from "./native-types.ts";
+import { supportsAdaptiveThinking, supportsDisabledThinking } from "./model-catalog.ts";
+import type { NativeContentBlock, NativeFrame, NativeMessage } from "./native-types.ts";
 
 export const TOOL_PREFIX = "mcp__pi__";
 export const NATIVE_REPLAY_DIAGNOSTIC = "claude-code.native-assistant.v1";
@@ -42,9 +43,7 @@ interface ReplayCarrier {
   version: 1;
   message: NativeMessage;
   projection: AssistantProjection;
-  initialUserPrefix?: unknown[];
   initialSystemMessages?: unknown[];
-  initialQueryPrefix?: NativeQueryPrefix;
 }
 
 interface AssistantProjection {
@@ -54,6 +53,42 @@ interface AssistantProjection {
 
 function sanitizeSurrogates(text: string): string {
   return text.replace(/[\uD800-\uDFFF]/gu, "\uFFFD");
+}
+
+/** Claude-safe tool IDs; distinct incompatible IDs hash to distinct 64-character IDs. */
+function nativeToolUseId(id: string): string {
+  if (/^[a-zA-Z0-9_-]{1,64}$/u.test(id)) return id;
+  return `pi_${createHash("sha256").update(id).digest("hex").slice(0, 61)}`;
+}
+
+export function prepareMessages(messages: Message[], model: Model<any>): Message[] {
+  const toolCallIds = new Map<string, string>();
+  return messages.map((message) => {
+    if (message.role === "toolResult") {
+      const id = toolCallIds.get(message.toolCallId);
+      return id && id !== message.toolCallId ? { ...message, toolCallId: id } : message;
+    }
+    if (
+      message.role !== "assistant" ||
+      (message.provider === model.provider && message.api === model.api && message.model === model.id)
+    ) {
+      return message;
+    }
+    return {
+      ...message,
+      diagnostics: message.diagnostics?.filter((item) => item.type !== NATIVE_REPLAY_DIAGNOSTIC),
+      content: message.content.flatMap((block): AssistantMessage["content"] => {
+        // Like pi-ai, drop thinking from other models: signatures only validate
+        // for their own model, and replaying it as text reads as visible reply.
+        if (block.type === "thinking") return [];
+        if (block.type === "text") return [{ type: "text", text: block.text }];
+        const id = nativeToolUseId(block.id);
+        toolCallIds.set(block.id, id);
+        const { thoughtSignature, ...toolCall } = block;
+        return [{ ...toolCall, id }];
+      }),
+    };
+  });
 }
 
 function clone<T>(value: T): T {
@@ -84,33 +119,14 @@ function replayCarrier(message: AssistantMessage): ReplayCarrier | undefined {
   return isReplayCarrier(candidate) ? candidate : undefined;
 }
 
-function replayMetadata<Key extends "initialUserPrefix" | "initialSystemMessages" | "initialQueryPrefix">(
-  messages: Message[], key: Key,
-): ReplayCarrier[Key] {
+export function getInitialSystemMessages(messages: Message[]): unknown[] | undefined {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (message?.role !== "assistant") continue;
-    const value = replayCarrier(message)?.[key];
-    if (key === "initialQueryPrefix" && value) {
-      const query = value as NativeQueryPrefix;
-      if (!Number.isInteger(query.userIndex) || query.userIndex < 1 || typeof query.canonicalHash !== "string"
-        || !/^[a-f0-9]{64}$/u.test(query.canonicalHash) || !Array.isArray(query.prefix)) continue;
-    }
+    const value = replayCarrier(message)?.initialSystemMessages;
     if (value) return clone(value);
   }
   return undefined;
-}
-
-export function getInitialUserPrefix(messages: Message[]): unknown[] | undefined {
-  return replayMetadata(messages, "initialUserPrefix");
-}
-
-export function getInitialSystemMessages(messages: Message[]): unknown[] | undefined {
-  return replayMetadata(messages, "initialSystemMessages");
-}
-
-export function getInitialQueryPrefix(messages: Message[]): NativeQueryPrefix | undefined {
-  return replayMetadata(messages, "initialQueryPrefix");
 }
 
 function projectionsEqual(left: AssistantProjection, right: AssistantProjection): boolean {
@@ -146,18 +162,12 @@ function toolResultContent(message: ToolResultMessage): string | unknown[] {
   );
 }
 
-/** Only Anthropic Messages producers sign thinking Claude can verify; other providers' reasoning is dropped. */
-function hasAnthropicThinking(message: AssistantMessage): boolean {
-  return message.provider === PROVIDER_ID || message.api === API_ID || message.api === "anthropic-messages";
-}
-
 function canonicalAssistantContent(message: AssistantMessage): NativeContentBlock[] {
   const blocks: NativeContentBlock[] = [];
-  const replayThinking = hasAnthropicThinking(message);
   for (const block of message.content) {
     if (block.type === "text" && block.text.trim()) {
       blocks.push({ type: "text", text: sanitizeSurrogates(block.text) });
-    } else if (block.type === "thinking" && replayThinking && block.thinking.trim() && block.thinkingSignature) {
+    } else if (block.type === "thinking" && block.thinking.trim() && block.thinkingSignature) {
       if (block.redacted) {
         blocks.push({ type: "redacted_thinking", data: block.thinkingSignature });
       } else {
@@ -179,11 +189,6 @@ function canonicalAssistantContent(message: AssistantMessage): NativeContentBloc
   return blocks;
 }
 
-function normalizeToolCallId(id: string): string {
-  if (/^[a-zA-Z0-9_-]{1,64}$/u.test(id)) return id;
-  return `pi_${createHash("sha256").update(id).digest("hex").slice(0, 61)}`;
-}
-
 function assistantContent(message: AssistantMessage): NativeContentBlock[] {
   const carrier = replayCarrier(message);
   let content: NativeContentBlock[];
@@ -200,7 +205,7 @@ function assistantContent(message: AssistantMessage): NativeContentBlock[] {
     content = canonicalAssistantContent(message);
   }
   return content.map((block) =>
-    block.type === "tool_use" ? { ...block, id: normalizeToolCallId(block.id) } : block,
+    block.type === "tool_use" ? { ...block, id: nativeToolUseId(block.id) } : block,
   );
 }
 
@@ -224,7 +229,7 @@ export function prepareFrames(messages: Message[]): NativeFrame[] {
       blocks = [
         {
           type: "tool_result",
-          tool_use_id: normalizeToolCallId(message.toolCallId),
+          tool_use_id: nativeToolUseId(message.toolCallId),
           content: toolResultContent(message),
           is_error: message.isError,
         },
@@ -396,10 +401,14 @@ export function buildExtraBody(
   if (options?.maxTokens !== undefined) body.max_tokens = options.maxTokens;
 
   if (options?.reasoning) {
-    if (supportsAdaptiveThinking(modelId)) body.thinking = { type: "adaptive" };
+    if (supportsAdaptiveThinking(modelId)) body.thinking = { type: "adaptive", display: "summarized" };
     body.output_config = {
       effort: options.reasoning === "minimal" ? "low" : options.reasoning,
     };
+  } else if (!supportsDisabledThinking(modelId)) {
+    // Models such as Opus 5.5 reject `disabled`; use the lowest adaptive effort instead.
+    body.thinking = { type: "adaptive" };
+    body.output_config = { effort: "low" };
   } else {
     body.thinking = { type: "disabled" };
     // Native clear-thinking edits are invalid when thinking is disabled.
@@ -411,9 +420,7 @@ export function buildExtraBody(
 export function makeReplayDiagnostic(
   message: NativeMessage,
   output: AssistantMessage,
-  initialUserPrefix?: unknown[],
   initialSystemMessages?: unknown[],
-  initialQueryPrefix?: NativeQueryPrefix,
 ) {
   return {
     type: NATIVE_REPLAY_DIAGNOSTIC,
@@ -423,9 +430,7 @@ export function makeReplayDiagnostic(
         version: 1,
         message: clone(message),
         projection: assistantProjection(output),
-        ...(initialUserPrefix ? { initialUserPrefix: clone(initialUserPrefix) } : {}),
         ...(initialSystemMessages ? { initialSystemMessages: clone(initialSystemMessages) } : {}),
-        ...(initialQueryPrefix ? { initialQueryPrefix: clone(initialQueryPrefix) } : {}),
       },
     },
   };

@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AssistantMessage, Message, Tool } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message, Model, Tool } from "@earendil-works/pi-ai";
 import {
   buildExtraBody,
   getInitialSystemMessages,
-  getInitialUserPrefix,
-  getInitialQueryPrefix,
   makeReplayDiagnostic,
   normalizeInputSchema,
   prepareFrames,
+  prepareMessages,
   prepareNativeTranscript,
   prepareTools,
   TOOL_PREFIX,
@@ -103,51 +102,6 @@ test("normalizes cross-provider tool IDs and preserves result linkage", () => {
   assert.equal((assistant.content[0] as { id: string }).id, sourceId);
 });
 
-test("replays thinking only from Anthropic producers across provider switches", () => {
-  const reasoning = { type: "reasoning", id: "rs_1", encrypted_content: "opaque", summary: [{ type: "summary_text", text: "Plan: read a." }] };
-  const codex: AssistantMessage = {
-    role: "assistant",
-    api: "openai-codex-responses",
-    provider: "openai-codex",
-    model: "gpt-6-sol",
-    content: [
-      { type: "thinking", thinking: "Plan: read a.", thinkingSignature: JSON.stringify(reasoning) },
-      { type: "thinking", thinking: "hidden", thinkingSignature: "opaque", redacted: true },
-      { type: "text", text: "Reading a." },
-      { type: "toolCall", id: "call_1|fc_1", name: "read", arguments: { path: "a" } },
-    ],
-    usage,
-    stopReason: "toolUse",
-    timestamp: 1,
-  };
-  const anthropic: AssistantMessage = {
-    role: "assistant",
-    api: "anthropic-messages",
-    provider: "anthropic",
-    model: "claude-opus-5-5",
-    content: [
-      { type: "thinking", thinking: "a is read", thinkingSignature: "anthropic-signed" },
-      { type: "text", text: "Done." },
-    ],
-    usage,
-    stopReason: "stop",
-    timestamp: 3,
-  };
-  const frames = prepareFrames([
-    { role: "user", content: "inspect", timestamp: 0 },
-    codex,
-    { role: "toolResult", toolCallId: "call_1|fc_1", toolName: "read", content: [{ type: "text", text: "A" }], isError: false, timestamp: 2 },
-    anthropic,
-    { role: "user", content: "continue on Claude", timestamp: 4 },
-  ]);
-
-  assert.deepEqual(frames[1]?.message.content.map((block) => (block as { type: string }).type), ["text", "tool_use"]);
-  assert.deepEqual(frames[3]?.message.content, [
-    { type: "thinking", thinking: "a is read", signature: "anthropic-signed" },
-    { type: "text", text: "Done." },
-  ]);
-});
-
 test("replays native signed blocks only while the visible projection is unchanged", () => {
   const assistant: AssistantMessage = {
     role: "assistant",
@@ -171,22 +125,9 @@ test("replays native signed blocks only while the visible projection is unchange
     ],
     stop_reason: "end_turn",
   };
-  const nativePrefix = [{ type: "text", text: "<system-reminder>stable</system-reminder>" }];
   const nativeSystems = [{ role: "system", content: [{ type: "text", text: "environment" }] }];
-  const queryPrefix = { userIndex: 2, canonicalHash: "a".repeat(64), prefix: nativePrefix };
-  assistant.diagnostics = [makeReplayDiagnostic(native, assistant, nativePrefix, nativeSystems, queryPrefix) as never];
-  const restored = JSON.parse(JSON.stringify(assistant));
-  assert.deepEqual(getInitialQueryPrefix([restored]), queryPrefix);
-  getInitialQueryPrefix([restored])!.prefix.push({ type: "text", text: "local mutation" });
-  assert.deepEqual(getInitialQueryPrefix([restored]), queryPrefix);
-  for (const invalid of [{ ...queryPrefix, userIndex: -1 }, { ...queryPrefix, prefix: "bad" }, { ...queryPrefix, canonicalHash: "bad" }]) {
-    restored.diagnostics[0].details.carrier.initialQueryPrefix = invalid;
-    assert.equal(getInitialQueryPrefix([restored]), undefined);
-  }
-  delete restored.diagnostics[0].details.carrier.initialQueryPrefix;
-  assert.equal(getInitialQueryPrefix([restored]), undefined);
+  assistant.diagnostics = [makeReplayDiagnostic(native, assistant, nativeSystems) as never];
 
-  assert.deepEqual(getInitialUserPrefix([assistant]), nativePrefix);
   assert.deepEqual(getInitialSystemMessages([assistant]), nativeSystems);
   const original = prepareFrames([
     { role: "user", content: "go", timestamp: 0 },
@@ -300,7 +241,7 @@ test("normalizes tool schemas and builds native generation fields", () => {
   );
   assert.deepEqual(buildExtraBody("claude-sonnet-5", prepared.nativeTools, { reasoning: "minimal" }), {
     tools: prepared.nativeTools,
-    thinking: { type: "adaptive" },
+    thinking: { type: "adaptive", display: "summarized" },
     output_config: { effort: "low" },
   });
   assert.deepEqual(buildExtraBody("claude-haiku-4-5-20251001", [], {}), {
@@ -308,4 +249,108 @@ test("normalizes tool schemas and builds native generation fields", () => {
     thinking: { type: "disabled" },
     context_management: { edits: [] },
   });
+  assert.deepEqual(buildExtraBody("claude-sonnet-5", [], {}), {
+    tools: [],
+    thinking: { type: "disabled" },
+    context_management: { edits: [] },
+  });
+  // Opus 5.5 rejects `thinking.type: disabled` (issue #2).
+  for (const id of ["claude-opus-5-5", "default", "claude-fable-5-1"]) {
+    assert.deepEqual(buildExtraBody(id, [], {}), {
+      tools: [],
+      thinking: { type: "adaptive" },
+      output_config: { effort: "low" },
+    });
+  }
+});
+
+test("keeps native replay only for the same model without changing the source history", () => {
+  const model = { id: "sonnet", api: "claude-code-stream-json", provider: "claude-code", input: ["text", "image"] } as unknown as Model<any>;
+  const assistant: AssistantMessage = {
+    role: "assistant",
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    content: [
+      { type: "thinking", thinking: "[Reasoning redacted]", thinkingSignature: "opaque", redacted: true },
+      { type: "text", text: "visible" },
+    ],
+    usage,
+    stopReason: "stop",
+    timestamp: 1,
+  };
+  const native = {
+    role: "assistant" as const,
+    content: [
+      { type: "redacted_thinking" as const, data: "opaque" },
+      { type: "text" as const, text: "visible" },
+    ],
+  };
+  assistant.diagnostics = [makeReplayDiagnostic(native, assistant) as never];
+  const messages: Message[] = [
+    { role: "user", content: "go", timestamp: 0 },
+    assistant,
+    { role: "user", content: "again", timestamp: 2 },
+  ];
+  const original = structuredClone(messages);
+
+  const sameModel = prepareFrames(prepareMessages(messages, model));
+  assert.deepEqual(sameModel[1]?.message.content, native.content);
+  const otherModel = prepareFrames(prepareMessages(messages, { ...model, id: "opus" }));
+  assert.deepEqual(otherModel[1]?.message.content, [{ type: "text", text: "visible" }]);
+  assert.deepEqual(messages, original);
+});
+
+test("foreign tool call ids that share a 64-character prefix stay distinct through replay", () => {
+  const ids = ["A", "B"].map((suffix) => `call_${"x".repeat(70)}|fc_${suffix}`);
+  const model = { id: "sonnet", api: "claude-code", provider: "claude-code", input: ["text"] } as unknown as Model<any>;
+  const messages: Message[] = [{ role: "user", content: "go", timestamp: 0 }];
+  ids.forEach((id, index) => messages.push(
+    { role: "assistant", api: "openai-responses", provider: "openai", model: "gpt-5",
+      content: [{ type: "toolCall", id, name: "read", arguments: {} }], usage, stopReason: "toolUse", timestamp: 2 * index + 1 },
+    { role: "toolResult", toolCallId: id, toolName: "read", content: [{ type: "text", text: id }], isError: false, timestamp: 2 * index + 2 },
+  ));
+  const frames = prepareFrames(prepareMessages(messages, model));
+  const uses = [frames[1], frames[3]].map((frame) => (frame?.message.content[0] as { id: string }).id);
+  const results = [frames[2], frames[4]].map((frame) => (frame?.message.content[0] as { tool_use_id: string }).tool_use_id);
+  assert.notEqual(uses[0], uses[1]);
+  assert.deepEqual(results, uses);
+  for (const id of uses) assert.match(id, /^[a-zA-Z0-9_-]{1,64}$/u);
+});
+
+test("normalizes foreign tool call ids and drops foreign reasoning before replay", () => {
+  const id = "call_abc|fc_" + "x".repeat(400);
+  const assistant: AssistantMessage = {
+    role: "assistant",
+    api: "openai-responses",
+    provider: "openai",
+    model: "gpt-5",
+    content: [
+      { type: "thinking", thinking: "", thinkingSignature: "encrypted" },
+      { type: "thinking", thinking: "inspect the file", thinkingSignature: "foreign-thinking" },
+      { type: "text", text: "checking", textSignature: "foreign-text" },
+      { type: "toolCall", id, name: "read", arguments: { path: "a" }, thoughtSignature: "foreign-tool" },
+    ],
+    usage,
+    stopReason: "toolUse",
+    timestamp: 1,
+  };
+  const model = { id: "sonnet", api: "claude-code", provider: "claude-code", input: ["text", "image"] } as unknown as Model<any>;
+  const messages: Message[] = [
+    { role: "user", content: "go", timestamp: 0 },
+    assistant,
+    { role: "toolResult", toolCallId: id, toolName: "read", content: [{ type: "text", text: "A" }], isError: false, timestamp: 2 },
+  ];
+  const original = structuredClone(messages);
+  const prepared = prepareMessages(messages, model);
+  const content = (prepared[1] as AssistantMessage).content;
+  assert.deepEqual(content[0], { type: "text", text: "checking" });
+  assert.equal("thoughtSignature" in content[1]!, false);
+  const frames = prepareFrames(prepared);
+
+  const toolUse = frames[1]?.message.content as Array<{ type: string; id: string }>;
+  assert.deepEqual(toolUse.map((block) => block.type), ["text", "tool_use"]);
+  assert.match(toolUse[1]!.id, /^[a-zA-Z0-9_-]{1,64}$/u);
+  assert.equal((frames[2]?.message.content[0] as { tool_use_id: string }).tool_use_id, toolUse[1]!.id);
+  assert.deepEqual(messages, original);
 });

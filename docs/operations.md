@@ -40,11 +40,38 @@ can disable it. `PI_CLAUDE_CODE_COMMAND` selects the CLI executable and
 `PI_CLAUDE_CODE_CONFIG_DIR` selects its configuration directory. These settings
 do not copy credentials into Pi.
 
+### Several Claude subscriptions
+
+Each subscription is a Claude Code configuration directory with its own login.
+Register and log in to each account once:
+
+```sh
+/claude-account add work ~/.claude-work
+CLAUDE_CONFIG_DIR=~/.claude-work claude auth login
+```
+
+When one plan limit is used up, run `/claude-account next` to rotate to the next
+registered account, or `/claude-account <name>` to select one. `/claude-account
+default` returns to the login from `PI_CLAUDE_CODE_CONFIG_DIR` or Claude Code's
+own default, and `/claude-account list` marks the active account. The switch
+applies to the next request, `/claude-code-status`, and model discovery in every
+Pi session. It persists in `claude-code-accounts.json` in the Pi agent directory,
+which stores names and absolute directories, not credentials; `~` and relative
+directories are resolved when the account is added. Concurrent sessions update
+the file under a lock. The command reports whether the selected account is
+logged in.
+
+Accounts do not share prompt caches. The first request after a switch starts a
+new Claude Code worker and writes a new cache entry. Pi does not switch accounts
+by itself; a usage-credit or plan-limit error still stops the turn.
+
 The integration is experimental and subscription billing may change; read the
 [upstream warning](../vendor/pi-claude-code/README.md). Usage-credit/overage events
 fail by default. `PI_CLAUDE_CODE_ALLOW_USAGE_CREDITS` explicitly opts into those
-charges. Inherited API-key, proxy, and cloud-provider overrides are rejected to
-avoid silently changing authentication or billing. Local fixtures verify
+charges. `ANTHROPIC_API_KEY` is removed from Claude Code's environment, and
+inherited auth-token, base-URL, and cloud-provider overrides are rejected, so a
+request cannot silently move from the selected subscription to another billing
+path. Local fixtures verify
 packaging and protocol behavior, not live subscription eligibility or cost.
 
 The replay rewrite allocates at most four explicit cache markers: one tool
@@ -59,14 +86,11 @@ also abort the agent. Local CLI/HTTP tests do not establish provider cache hits
 or subscription quota savings.
 
 Native environment/date reminders occupy their replay positions before the
-initial request is sent. Startup context attached to the first queried user
-message stays at that historical position, even with imported history. Replay
-carriers record the user ordinal and canonical-content hash along with the
-prefix; an edited or absent anchor does not receive stale context. This
-preserves native instructions rather than discarding them to improve cache
-statistics. Restoration requires recorded metadata and cannot reconstruct
-unrecorded native context. [Bounded Haiku verification](claude-cache-verification.md)
-records the live checks and their limits.
+initial request is sent. User messages are rebuilt from Pi history, so native
+reminders Claude Code attaches to user messages are not sent. Claude Code workers
+run without auto-memory and project `CLAUDE.md` loading; Pi supplies context.
+[Bounded Haiku verification](claude-cache-verification.md) records the live
+checks and their limits.
 
 A session can switch to Claude Code from another provider. Historical tool-call
 identifiers are normalized for Claude, and other providers' reasoning is dropped

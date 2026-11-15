@@ -2,20 +2,17 @@
 
 ## Contract and implementation
 
-The [vendor manifest](../scripts/vendor/pi-claude-code/manifest.json) applies two
-replay-stability patches:
+The [vendor manifest](../scripts/vendor/pi-claude-code/manifest.json) applies the
+[initial reminder layout](../scripts/vendor/pi-claude-code/patches/0003-stable-initial-reminders.patch)
+patch: native environment/date reminders occupy their replay positions before
+the first request is sent, and cleanup preserves the bootstrap block. Upstream
+rebuilds user messages from Pi history, so startup reminders Claude Code attaches
+to user messages are not sent and later prefixes extend the first request.
 
-- [Initial reminder layout](../scripts/vendor/pi-claude-code/patches/0004-stable-initial-reminders.patch):
-  native environment/date reminders occupy their replay positions before the
-  first request is sent. Cleanup preserves the bootstrap block and supports
-  combined legacy snapshots.
-- [Anchored startup context](../scripts/vendor/pi-claude-code/patches/0005-anchor-native-query-context.patch):
-  native startup context stays on the user message that first triggered
-  inference. Its carrier stores a user ordinal, canonical-content hash, and
-  prefix blocks. An edited or missing anchor does not receive stale context.
+The live runs below used the earlier pin `b963238` with separate reminder and
+startup-context patches. They have not been repeated on the current pin.
 
-These preserve native instructions and leave Pi's saved user/tool messages
-unchanged. Cache markers can move without changing message content. Native
+Pi's saved user/tool messages are not changed. Cache markers can move without changing message content. Native
 metadata can also change when a worker is replaced; neither observation alone
 proves a cache miss.
 

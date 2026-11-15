@@ -53,9 +53,9 @@ test("usage credits are opt-in", () => {
 
 test("stops when Claude Code reports a request was charged to usage credits", async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "pi-claude-code-billing-")));
-  const executable = join(root, "fake-claude.mjs");
+  const script = join(root, "fake-claude.mjs");
   await writeFile(
-    executable,
+    script,
     `#!/usr/bin/env node
 import readline from "node:readline";
 if (process.argv.includes("auth") && process.argv.includes("status")) {
@@ -86,6 +86,12 @@ for await (const line of input) {
 `,
     "utf8",
   );
+  // Windows cannot execute a shebang script directly; go through a .cmd shim,
+  // which also exercises the extension's cmd.exe launch path.
+  const executable = process.platform === "win32" ? join(root, "fake-claude.cmd") : script;
+  if (executable !== script) {
+    await writeFile(executable, `@ECHO off\r\n"${process.execPath}" "${script}" %*\r\n`, "utf8");
+  }
   await chmod(executable, 0o755);
 
   const request = (env: Record<string, string>) =>
@@ -96,7 +102,6 @@ for await (const line of input) {
       systemPrompt: "system",
       manifest: [],
       extraBody: { tools: [] },
-      toolNames: new Set(),
       env: { PI_CLAUDE_CODE_COMMAND: executable, ...env },
       timeoutMs: 5_000,
     });

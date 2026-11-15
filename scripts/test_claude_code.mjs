@@ -85,7 +85,7 @@ try {
   assert.deepEqual(loaded.errors, []);
   assert.deepEqual(loaded.warnings, []);
   assert.deepEqual(loaded.loaded, [path.join(installed, "vendor/pi-claude-code/src/index.ts")]);
-  assert.deepEqual(loaded.commands, ["claude-code-status"]);
+  assert.deepEqual(loaded.commands, ["claude-code-status", "claude-account"]);
   assert.deepEqual(loaded.providers.map(({ id }) => id), ["claude-code"]);
   assert(loaded.providers[0].models.includes("claude-opus-5-5"));
 
@@ -94,11 +94,10 @@ try {
     execFileSync("git", ["apply", "--reverse", path.join(inputs, "patches", patch)], { cwd: installedVendor, timeout: 30_000 });
   }
   const unpatched = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", probe], probeOptions));
-  assert.equal(unpatched.errors.length, 1);
-  assert.match(unpatched.errors[0].error, /Cannot find module ['"][^'"]*\/providers\/anthropic\.models['"]/);
-  assert.deepEqual(unpatched.loaded, []);
-  assert.deepEqual(unpatched.providers, []);
-  console.log(`PASS: clean tarball installation registers one Claude Code provider and status command on Pi ${version}, Node ${process.version}, ${process.platform}/${process.arch}; the unpatched import fails. No Claude login or model requests.`);
+  assert.deepEqual(unpatched.errors, []);
+  assert.deepEqual(unpatched.commands, ["claude-code-status"]);
+  assert.deepEqual(unpatched.providers.map(({ id }) => id), ["claude-code"]);
+  console.log(`PASS: clean tarball installation registers one Claude Code provider with status and account commands on Pi ${version}, Node ${process.version}, ${process.platform}/${process.arch}; pristine upstream loads with the status command only. No Claude login or model requests.`);
 } finally {
   await rm(root, { recursive: true, force: true });
 }

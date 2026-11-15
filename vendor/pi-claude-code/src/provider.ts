@@ -1,9 +1,15 @@
 import { createProvider, type AuthContext, type ProviderEnv } from "@earendil-works/pi-ai";
-import { discoverClaudeModels, getClaudeStatus, LOGIN_HINT } from "./claude-cli.ts";
+import { accountEnv, type ClaudeAccounts } from "./accounts.ts";
+import { discoverClaudeModels, getClaudeStatus, LOGIN_HINT, POWERSHELL_ENV } from "./claude-cli.ts";
 import { API_ID, CLAUDE_CODE_MODELS, modelFromDiscovery, PROVIDER_ID } from "./model-catalog.ts";
 import { streamClaudeCode } from "./stream.ts";
 
-const PROVIDER_ENV_NAMES = ["PI_CLAUDE_CODE_COMMAND", "PI_CLAUDE_CODE_CONFIG_DIR", "CLAUDE_CONFIG_DIR"] as const;
+const PROVIDER_ENV_NAMES = [
+  "PI_CLAUDE_CODE_COMMAND",
+  "PI_CLAUDE_CODE_CONFIG_DIR",
+  "CLAUDE_CONFIG_DIR",
+  POWERSHELL_ENV,
+] as const;
 
 async function providerEnvironment(ctx: AuthContext): Promise<ProviderEnv | undefined> {
   const env: ProviderEnv = {};
@@ -26,8 +32,15 @@ export function claudeCodeEnv(): Record<string, string | undefined> {
   return { ...process.env, ...lastProviderEnv };
 }
 
-export function createClaudeCodeProvider() {
+export interface ClaudeCodeProviderOptions {
+  /** Reads the account selection; its config directory overrides configured settings. */
+  accounts?: () => Promise<ClaudeAccounts>;
+}
+
+export function createClaudeCodeProvider(options: ClaudeCodeProviderOptions = {}) {
   let discoveredIds: Set<string> | undefined;
+  const selected = async () => (options.accounts ? accountEnv(await options.accounts()) : undefined);
+  const currentEnv = async () => ({ ...claudeCodeEnv(), ...(await selected()) });
   const externalOAuthMarker = () => ({
     type: "oauth" as const,
     access: "claude-code-external",
@@ -47,7 +60,7 @@ export function createClaudeCodeProvider() {
         async check({ ctx, signal }) {
           const providerEnv = await providerEnvironment(ctx);
           lastProviderEnv = providerEnv;
-          const status = await getClaudeStatus(claudeCodeEnv(), signal);
+          const status = await getClaudeStatus(await currentEnv(), signal);
           // Only report the provider as configured when Claude Code is
           // installed and logged in, so Pi hides its models otherwise.
           if (!status.available || !status.loggedIn) return undefined;
@@ -62,7 +75,7 @@ export function createClaudeCodeProvider() {
           lastProviderEnv = providerEnv;
           return {
             auth: { apiKey: "external-process" },
-            env: providerEnv,
+            env: { ...providerEnv, ...(await selected()) },
             source: "Claude Code CLI",
           };
         },
@@ -80,8 +93,8 @@ export function createClaudeCodeProvider() {
           );
         },
         async refresh(_credential, signal) {
-          const status = await getClaudeStatus(claudeCodeEnv(), signal);
-          if (!status.subscription) throw new Error(LOGIN_HINT);
+          const status = await getClaudeStatus(await currentEnv(), signal);
+          if (!status.subscription) throw new Error(status.detail ?? LOGIN_HINT);
           return externalOAuthMarker();
         },
         async toAuth() {
@@ -91,7 +104,7 @@ export function createClaudeCodeProvider() {
     },
     models: CLAUDE_CODE_MODELS,
     async fetchModels({ signal }) {
-      const models = (await discoverClaudeModels(claudeCodeEnv(), signal)).map(modelFromDiscovery);
+      const models = (await discoverClaudeModels(await currentEnv(), signal)).map(modelFromDiscovery);
       discoveredIds = new Set(models.map((model) => model.id));
       return models;
     },

@@ -1,8 +1,8 @@
 diff --git a/src/claude-cli.ts b/src/claude-cli.ts
-index 6c0595e..51b1878 100644
+index b883a3f..b1be5f5 100644
 --- a/src/claude-cli.ts
 +++ b/src/claude-cli.ts
-@@ -59,6 +59,8 @@ export interface RunClaudeInput {
+@@ -63,6 +63,8 @@ export interface RunClaudeInput {
    /** Beta features appended to Claude Code's own request header by the turn relay. */
    betas?: string[];
    onEvent?: (event: AnthropicStreamEvent) => void;
@@ -11,7 +11,7 @@ index 6c0595e..51b1878 100644
    /** Pi session whose linear continuation may reuse a warm Claude process. */
    sessionId?: string;
  }
-@@ -541,19 +543,18 @@ function setCacheBreakpoint(message: NativeRequestMessage): void {
+@@ -710,19 +712,18 @@ function setCacheBreakpoint(message: NativeRequestMessage): void {
  }
  
  function setReplayCacheBreakpoints(messages: NativeRequestMessage[]): void {
@@ -40,7 +40,7 @@ index 6c0595e..51b1878 100644
    const final = messages.at(-1);
    if (final) setCacheBreakpoint(final);
  }
-@@ -618,14 +619,17 @@ function injectNativeSystemMessages(
+@@ -836,14 +837,17 @@ function injectNativeSystemMessages(
    return output;
  }
  
@@ -64,7 +64,7 @@ index 6c0595e..51b1878 100644
    }
  }
  
-@@ -639,6 +643,8 @@ export function rewriteInitialRequest(
+@@ -856,6 +860,8 @@ export function rewriteInitialRequest(
    const payload = JSON.parse(body.toString("utf8")) as {
      messages?: NativeRequestMessage[];
      system?: unknown;
@@ -73,7 +73,7 @@ index 6c0595e..51b1878 100644
    };
    let messages = payload.messages;
    const first = messages?.[0];
-@@ -666,9 +672,12 @@ export function rewriteInitialRequest(
+@@ -882,9 +888,12 @@ export function rewriteInitialRequest(
    if (nativeSystemInjections) {
      messages = injectNativeSystemMessages(messages!, nativeSystemInjections);
      payload.messages = messages;
@@ -88,28 +88,13 @@ index 6c0595e..51b1878 100644
  
    return Buffer.from(JSON.stringify(payload));
  }
-@@ -900,16 +909,19 @@ class ClaudeProcess {
-     const canonicalInitialUser = input.frames.find((frame) => frame.type === "user")?.message.content ?? [];
+@@ -1126,7 +1135,13 @@ class ClaudeProcess {
+     };
      this.relay.beginTurn(
        deliver,
--      input.initialUserPrefix || input.initialSystemMessages || input.nativeSystemInjections
--        ? (body) =>
--            rewriteInitialRequest(
--              body,
--              input.initialUserPrefix,
--              canonicalInitialUser,
--              input.initialSystemMessages,
--              input.nativeSystemInjections,
--            )
--        : undefined,
+-      (body) => rewriteInitialRequest(body, input.frames, input.initialSystemMessages, input.nativeSystemInjections),
 +      async (body) => {
-+        const rewritten = rewriteInitialRequest(
-+          body,
-+          input.initialUserPrefix,
-+          canonicalInitialUser,
-+          input.initialSystemMessages,
-+          input.nativeSystemInjections,
-+        );
++        const rewritten = rewriteInitialRequest(body, input.frames, input.initialSystemMessages, input.nativeSystemInjections);
 +        if (!input.onPayload) return rewritten;
 +        const payload: unknown = JSON.parse(rewritten.toString("utf8"));
 +        const replacement = await input.onPayload(payload);
@@ -119,22 +104,22 @@ index 6c0595e..51b1878 100644
      );
  
 diff --git a/src/stream.ts b/src/stream.ts
-index b516241..0932541 100644
+index a80889e..529f17f 100644
 --- a/src/stream.ts
 +++ b/src/stream.ts
-@@ -388,6 +388,7 @@ export function streamClaudeCode(
+@@ -385,6 +385,7 @@ export function streamClaudeCode(
          betas: nativeTranscript ? [NATIVE_TOOL_CHANGES_BETA] : undefined,
          sessionId: options?.cacheRetention === "none" ? undefined : options?.sessionId,
          onEvent: (event) => translator.event(event),
 +        onPayload: options?.onPayload ? (payload) => options.onPayload!(payload, model) : undefined,
        });
-       translator.finish(
-         response.message,
+       translator.finish(response.message, response.usage, response.initialSystemMessages);
+       output.providerThinkingLevel = options?.reasoning;
 diff --git a/src/turn-relay.ts b/src/turn-relay.ts
-index 08ec86e..197c8bc 100644
+index 17d5e02..87cfce5 100644
 --- a/src/turn-relay.ts
 +++ b/src/turn-relay.ts
-@@ -130,14 +130,14 @@ export class TurnRelay {
+@@ -148,14 +148,14 @@ export class TurnRelay {
    private cancelled = false;
    private closed = false;
    private baseUrl?: string;
@@ -151,7 +136,7 @@ index 08ec86e..197c8bc 100644
      requestBetas: string[] = [],
    ) {
      this.upstream = new URL(upstream);
-@@ -163,7 +163,7 @@ export class TurnRelay {
+@@ -181,7 +181,7 @@ export class TurnRelay {
    /** Arm the persistent relay for one new Claude turn. */
    beginTurn(
      onEvent?: (event: AnthropicStreamEvent) => void,
@@ -160,7 +145,7 @@ index 08ec86e..197c8bc 100644
      requestBetas: string[] = [],
    ): void {
      if (this.closed) throw new Error("Claude Code turn relay is closed");
-@@ -259,8 +259,9 @@ export class TurnRelay {
+@@ -278,8 +278,9 @@ export class TurnRelay {
      let upstreamRequest: http.ClientRequest | undefined;
      try {
        let body = await this.readBody(request);
@@ -172,34 +157,72 @@ index 08ec86e..197c8bc 100644
        if (this.cancelled) return;
  
 diff --git a/tests/claude-cli.test.ts b/tests/claude-cli.test.ts
-index d6a8041..96f76f8 100644
+index 7812801..8174735 100644
 --- a/tests/claude-cli.test.ts
 +++ b/tests/claude-cli.test.ts
-@@ -1,8 +1,12 @@
+@@ -1,10 +1,12 @@
  import assert from "node:assert/strict";
-+import * as http from "node:http";
+ import * as http from "node:http";
 +import https from "node:https";
 +import { syncBuiltinESMExports } from "node:module";
  import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
  import { tmpdir } from "node:os";
  import { join } from "node:path";
  import test from "node:test";
-+import { normalizeContext } from "@earendil-works/pi-ai";
+-import { isRetryableAssistantError, type AssistantMessage } from "@earendil-works/pi-ai";
++import { isRetryableAssistantError, normalizeContext, type AssistantMessage } from "@earendil-works/pi-ai";
  import {
    cachedClaudeProcessCount,
    closeClaudeProcesses,
-@@ -11,6 +15,7 @@ import {
-   runClaudeRequest,
+@@ -15,6 +17,7 @@ import {
  } from "../src/claude-cli.ts";
+ import type { NativeFrame } from "../src/native-types.ts";
  import { createClaudeCodeProvider } from "../src/provider.ts";
 +import { streamClaudeCode } from "../src/stream.ts";
  
- test("stabilizes Claude Code's native replay reminders and cache breakpoint", () => {
-   const canonical = [{ type: "text", text: "inspect" }];
-@@ -140,6 +145,170 @@ test("injects native system history at assistant boundaries", () => {
+ type Block = Record<string, unknown>;
+ type WireMessage = { role: string; content: unknown };
+@@ -112,7 +115,7 @@ test("strips reminders when the first user message carries none (issue #27)", ()
+     { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: `result\n${memory}${account}` }] },
+   ];
+   // No captured system messages: stripping must not depend on them.
+-  assert.deepEqual(rewrite(wire, framesFor(canonical)), canonical);
++  assert.deepEqual(withoutMarkers(rewrite(wire, framesFor(canonical))), canonical);
+   assert.deepEqual(
+     withoutMarkers(
+       rewrite(wire, framesFor(canonical), [{ role: "system", content: "environment reminder" }]).filter(
+@@ -172,8 +175,8 @@ test("strips reminder blocks from text-array tool results and keeps Claude Code'
+     ],
+     frames,
    );
+-  assert.deepEqual(rewritten[0]?.content, [text("look"), resized, note]);
+-  assert.deepEqual(rewritten[2]?.content, [
++  assert.deepEqual(withoutMarkers(rewritten[0]?.content), [text("look"), resized, note]);
++  assert.deepEqual(withoutMarkers(rewritten[2]?.content), [
+     { type: "tool_result", tool_use_id: "t1", content: [text("result"), image] },
+   ]);
+ });
+@@ -192,12 +195,12 @@ test("keeps user-authored reminder-like text and ordinary output unchanged", ()
+   ];
+   const wire = structuredClone(canonical);
+   (wire[2]!.content as Block[])[0]!.content = `file says\n${account}\n${memory}`;
+-  assert.deepEqual(rewrite(wire, framesFor(canonical)), canonical);
+-  assert.deepEqual(rewrite(structuredClone(canonical), framesFor(canonical)), canonical);
++  assert.deepEqual(withoutMarkers(rewrite(wire, framesFor(canonical))), canonical);
++  assert.deepEqual(withoutMarkers(rewrite(structuredClone(canonical), framesFor(canonical))), canonical);
  });
  
+ test("moves a breakpoint on a dropped reminder to the canonical tail", () => {
+-  const marker = { type: "ephemeral" };
++  const marker = { type: "ephemeral", ttl: "1h" };
+   const rewritten = rewrite(
+     [{ role: "user", content: [text("inspect"), { ...text(memory), cache_control: marker }] }],
+     framesFor([{ role: "user", content: [text("inspect")] }]),
+@@ -801,3 +804,168 @@ test("reports upstream 5xx as retryable and keeps 4xx non-retryable", async () =
+   assert.match(invalid.message, /Incomplete Claude Code upstream response \(status 400.*upstream said: bad request/);
+   assert.equal(invalid.retryable, false);
+ });
++
 +test("replay budgets four protocol cache markers without changing nested tool data", () => {
 +  const marker = { type: "ephemeral", ttl: "1h" };
 +  const input = {
@@ -217,7 +240,7 @@ index d6a8041..96f76f8 100644
 +    ],
 +  };
 +  for (const nativeInjections of [undefined, []]) {
-+    const rewrite = (body: Buffer) => rewriteInitialRequest(body, undefined, input.messages[0]!.content, undefined, nativeInjections);
++    const rewrite = (body: Buffer) => rewriteInitialRequest(body, framesFor(input.messages as WireMessage[]), undefined, nativeInjections);
 +    const once = rewrite(Buffer.from(JSON.stringify(input)));
 +    const final = JSON.parse(once.toString());
 +    const blocks = [...final.tools, ...final.system, ...final.messages.flatMap((message: any) => message.content)];
@@ -364,11 +387,8 @@ index d6a8041..96f76f8 100644
 +  }
 +});
 +
- test("runs a request through a stream-json Claude executable", async () => {
-   const root = await mkdtemp(join(tmpdir(), "pi-claude-code-test-"));
-   const workingRoot = await realpath(root);
 diff --git a/tests/turn-relay.test.ts b/tests/turn-relay.test.ts
-index 037370c..07bfe23 100644
+index 7a1d1c7..0d910b1 100644
 --- a/tests/turn-relay.test.ts
 +++ b/tests/turn-relay.test.ts
 @@ -91,6 +91,52 @@ test("relays one upstream Messages request and captures its SSE response", async

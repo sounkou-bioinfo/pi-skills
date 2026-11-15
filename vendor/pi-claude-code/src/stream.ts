@@ -18,15 +18,14 @@ import {
 import { describeUsageCreditsRejection } from "./billing.ts";
 import { runClaudeRequest } from "./claude-cli.ts";
 import { nativeModel, supportsNativeToolChanges } from "./model-catalog.ts";
-import type { AnthropicStreamEvent, NativeContentBlock, NativeMessage, NativeQueryPrefix, NativeUsage } from "./native-types.ts";
+import type { AnthropicStreamEvent, NativeContentBlock, NativeMessage, NativeUsage } from "./native-types.ts";
 import {
   buildExtraBody,
   getInitialSystemMessages,
-  getInitialUserPrefix,
-  getInitialQueryPrefix,
   makeReplayDiagnostic,
   NATIVE_TOOL_CHANGES_BETA,
   prepareFrames,
+  prepareMessages,
   prepareNativeTranscript,
   prepareTools,
   TOOL_PREFIX,
@@ -123,7 +122,14 @@ function comparableContent(content: AssistantMessage["content"]): unknown[] {
   });
 }
 
-function nativeContent(content: NativeContentBlock[], toolNames: Set<string>): AssistantMessage["content"] {
+// Claude can name a tool that Pi never declared. Pi's agent loop answers that
+// with a "not found" tool result the model can recover from, so the name passes
+// through rather than failing the turn.
+function piToolName(nativeName: string): string {
+  return nativeName.startsWith(TOOL_PREFIX) ? nativeName.slice(TOOL_PREFIX.length) : nativeName;
+}
+
+function nativeContent(content: NativeContentBlock[]): AssistantMessage["content"] {
   const converted: AssistantMessage["content"] = [];
   for (const block of content) {
     if (block.type === "text") {
@@ -142,10 +148,7 @@ function nativeContent(content: NativeContentBlock[], toolNames: Set<string>): A
         redacted: true,
       });
     } else if (block.type === "tool_use") {
-      if (!block.name.startsWith(TOOL_PREFIX)) throw new Error(`Claude Code returned unexpected tool ${block.name}`);
-      const name = block.name.slice(TOOL_PREFIX.length);
-      if (!toolNames.has(name)) throw new Error(`Claude Code returned unavailable tool ${name}`);
-      converted.push({ type: "toolCall", id: block.id, name, arguments: block.input as never });
+      converted.push({ type: "toolCall", id: block.id, name: piToolName(block.name), arguments: block.input as never });
     }
   }
   return converted;
@@ -159,7 +162,6 @@ class EventTranslator {
     private readonly model: Model<any>,
     private readonly output: AssistantMessage,
     private readonly stream: AssistantMessageEventStream,
-    private readonly toolNames: Set<string>,
   ) {}
 
   event(event: AnthropicStreamEvent): void {
@@ -193,11 +195,9 @@ class EventTranslator {
   finish(
     message: NativeMessage,
     usage: NativeUsage,
-    initialUserPrefix?: unknown[],
     initialSystemMessages?: unknown[],
-    initialQueryPrefix?: NativeQueryPrefix,
   ): void {
-    const authoritative = nativeContent(message.content, this.toolNames);
+    const authoritative = nativeContent(message.content);
     if (!this.sawContentEvent) {
       this.emitComplete(authoritative);
     } else if (JSON.stringify(comparableContent(this.output.content)) !== JSON.stringify(comparableContent(authoritative))) {
@@ -212,7 +212,7 @@ class EventTranslator {
     this.output.errorMessage = mapped.errorMessage;
     this.output.diagnostics = [
       ...(this.output.diagnostics ?? []),
-      makeReplayDiagnostic(message, this.output, initialUserPrefix, initialSystemMessages, initialQueryPrefix) as never,
+      makeReplayDiagnostic(message, this.output, initialSystemMessages) as never,
     ];
   }
 
@@ -241,13 +241,10 @@ class EventTranslator {
       } as IndexedThinking);
       this.stream.push({ type: "thinking_start", contentIndex, partial: this.output });
     } else if (native.type === "tool_use") {
-      if (!native.name.startsWith(TOOL_PREFIX)) throw new Error(`Claude Code returned unexpected tool ${native.name}`);
-      const name = native.name.slice(TOOL_PREFIX.length);
-      if (!this.toolNames.has(name)) throw new Error(`Claude Code returned unavailable tool ${name}`);
       this.output.content.push({
         type: "toolCall",
         id: native.id,
-        name,
+        name: piToolName(native.name),
         arguments: (native.input ?? {}) as ToolCall["arguments"],
         nativeIndex,
         partialJson: "",
@@ -332,7 +329,7 @@ export function normalizeError(error: unknown): string {
 
 export function streamClaudeCode(
   model: Model<any>,
-  context: TranscriptContext,
+  sourceContext: TranscriptContext,
   options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
   const stream = createAssistantMessageEventStream();
@@ -349,6 +346,7 @@ export function streamClaudeCode(
 
   void (async () => {
     try {
+      const context = { ...sourceContext, messages: prepareMessages(sourceContext.messages, model) };
       const nativeTranscript = prepareNativeTranscript(
         context.messages,
         supportsNativeToolChanges(model.id),
@@ -362,16 +360,14 @@ export function streamClaudeCode(
         : getCurrentSystemPrompt(transcript.messages);
       const tools = getCurrentTools(transcript.messages);
       const frames = prepareFrames(transcript.messages);
-      const initialUserPrefix = getInitialUserPrefix(transcript.messages);
       const initialSystemMessages = getInitialSystemMessages(transcript.messages);
-      const initialQueryPrefix = getInitialQueryPrefix(transcript.messages);
       const preparedTools = prepareTools(tools);
       const extraBody = buildExtraBody(
         model.id,
         nativeTranscript?.requestTools ?? preparedTools.nativeTools,
         options,
       );
-      const translator = new EventTranslator(model, output, stream, preparedTools.names);
+      const translator = new EventTranslator(model, output, stream);
 
       stream.push({ type: "start", partial: output });
       const response = await runClaudeRequest({
@@ -381,26 +377,17 @@ export function streamClaudeCode(
         systemPrompt,
         manifest: preparedTools.manifest,
         extraBody,
-        toolNames: preparedTools.names,
         signal: options?.signal,
         timeoutMs: options?.timeoutMs,
         env: options?.env,
-        initialUserPrefix,
         initialSystemMessages,
-        initialQueryPrefix,
         nativeSystemInjections: nativeTranscript?.systemInjections,
         betas: nativeTranscript ? [NATIVE_TOOL_CHANGES_BETA] : undefined,
         sessionId: options?.cacheRetention === "none" ? undefined : options?.sessionId,
         onEvent: (event) => translator.event(event),
         onPayload: options?.onPayload ? (payload) => options.onPayload!(payload, model) : undefined,
       });
-      translator.finish(
-        response.message,
-        response.usage,
-        response.initialUserPrefix,
-        response.initialSystemMessages,
-        response.initialQueryPrefix,
-      );
+      translator.finish(response.message, response.usage, response.initialSystemMessages);
       output.providerThinkingLevel = options?.reasoning;
       output.diagnostics = [
         ...(output.diagnostics ?? []),

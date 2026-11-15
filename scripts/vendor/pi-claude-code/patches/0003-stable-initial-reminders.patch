@@ -1,17 +1,17 @@
 diff --git a/src/claude-cli.ts b/src/claude-cli.ts
-index 51b1878..593913f 100644
+index b1be5f5..fcdcd38 100644
 --- a/src/claude-cli.ts
 +++ b/src/claude-cli.ts
-@@ -653,6 +653,8 @@ export function rewriteInitialRequest(
+@@ -870,6 +870,8 @@ export function rewriteInitialRequest(
    }
-   if (prefix) first.content = [...structuredClone(prefix), ...structuredClone(canonicalContent)];
+   if (messages) restoreCanonicalUserContent(messages, frames);
  
 +  // Establish the replay layout before the first request creates a cached prefix.
 +  initialSystemMessages ??= deriveInitialSystemMessages(body);
    if (initialSystemMessages?.length && messages) {
      let systemEnd = 1;
      while (messages[systemEnd]?.role === "system") systemEnd += 1;
-@@ -661,9 +663,9 @@ export function rewriteInitialRequest(
+@@ -878,9 +880,9 @@ export function rewriteInitialRequest(
      const initialText = initialSystemMessages
        .map((message) => contentText((message as NativeRequestMessage).content))
        .join("\n");
@@ -22,12 +22,12 @@ index 51b1878..593913f 100644
 +      if (!trailingText || !`\n${initialText}\n`.includes(`\n${trailingText}\n`)) break;
        messages.pop();
      }
-     removeRepeatedUserReminders(messages, prefix);
+   }
 diff --git a/tests/claude-cli.test.ts b/tests/claude-cli.test.ts
-index 96f76f8..10e1832 100644
+index 8174735..64ce97e 100644
 --- a/tests/claude-cli.test.ts
 +++ b/tests/claude-cli.test.ts
-@@ -90,6 +90,48 @@ test("stabilizes Claude Code's native replay reminders and cache breakpoint", ()
+@@ -229,6 +229,46 @@ test("refuses requests that do not line up with Pi's history", () => {
    );
  });
  
@@ -39,17 +39,14 @@ index 96f76f8..10e1832 100644
 +    { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "mcp__pi__read", input: { path: "a" } }] },
 +    { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "file" }] },
 +  ];
-+  const stripMarkers = (messages: any[]) => messages.map((message) => ({
-+    ...message,
-+    content: Array.isArray(message.content) ? message.content.map(({ cache_control, ...block }: any) => block) : message.content,
-+  }));
 +  for (const history of [[], imported]) {
++    const frames = framesFor([firstUser, ...history] as WireMessage[]);
 +    const body = Buffer.from(JSON.stringify({ messages: [firstUser, environment, ...history, date] }));
-+    const first = rewriteInitialRequest(body, undefined, firstUser.content);
++    const first = rewriteInitialRequest(body, frames, undefined);
 +    const expected = [firstUser, environment, date, ...history];
-+    assert.deepEqual(stripMarkers(JSON.parse(first.toString()).messages), expected);
-+    assert.deepEqual(rewriteInitialRequest(first, undefined, firstUser.content), first, "normalization is idempotent");
-+    assert.deepEqual(rewriteInitialRequest(first, [], firstUser.content, [environment, date]), first,
++    assert.deepEqual(withoutMarkers(JSON.parse(first.toString()).messages), withoutMarkers(expected));
++    assert.deepEqual(rewriteInitialRequest(first, frames, undefined), first, "normalization is idempotent");
++    assert.deepEqual(rewriteInitialRequest(first, frames, [environment, date]), first,
 +      "a restored snapshot preserves a user-only native bootstrap");
 +
 +    const continuation = [
@@ -57,8 +54,8 @@ index 96f76f8..10e1832 100644
 +      { role: "user", content: [{ type: "text", text: "next" }] },
 +    ];
 +    const native = Buffer.from(JSON.stringify({ messages: [firstUser, environment, ...history, ...continuation, date] }));
-+    const next = rewriteInitialRequest(native, [], firstUser.content, [environment, date]);
-+    assert.deepEqual(stripMarkers(JSON.parse(next.toString()).messages), [...expected, ...continuation]);
++    const next = rewriteInitialRequest(native, framesFor([firstUser, ...history, ...continuation] as WireMessage[]), [environment, date]);
++    assert.deepEqual(withoutMarkers(JSON.parse(next.toString()).messages), withoutMarkers([...expected, ...continuation]));
 +    assert.equal(JSON.parse(body.toString()).messages.at(-1).content[0].text, date.content[0].text);
 +  }
 +});
@@ -67,8 +64,9 @@ index 96f76f8..10e1832 100644
 +  const initial = { role: "system", content: "Environment includes boundary" };
 +  const tail = { role: "system", content: "boundary" };
 +  const firstUser = { role: "user", content: [{ type: "text", text: "inspect" }] };
-+  const rewritten = JSON.parse(rewriteInitialRequest(Buffer.from(JSON.stringify({ messages: [firstUser, initial,
-+    { role: "assistant", content: [{ type: "text", text: "done" }] }, tail] })), [], firstUser.content, [initial]).toString());
++  const reply = { role: "assistant", content: [{ type: "text", text: "done" }] };
++  const rewritten = JSON.parse(rewriteInitialRequest(Buffer.from(JSON.stringify({ messages: [firstUser, initial, reply, tail] })),
++    framesFor([firstUser, reply] as WireMessage[]), [initial]).toString());
 +  assert.equal(rewritten.messages.at(-1).role, "system");
 +  assert.equal(rewritten.messages.at(-1).content[0].text, tail.content);
 +});
@@ -76,7 +74,7 @@ index 96f76f8..10e1832 100644
  test("injects native system history at assistant boundaries", () => {
    const body = {
      system: [
-@@ -121,13 +163,13 @@ test("injects native system history at assistant boundaries", () => {
+@@ -260,13 +300,13 @@ test("injects native system history at assistant boundaries", () => {
      "user",
      "system",
      "system",
@@ -92,7 +90,7 @@ index 96f76f8..10e1832 100644
      "tool_addition",
    );
    assert.equal(
-@@ -171,10 +213,12 @@ test("replay budgets four protocol cache markers without changing nested tool da
+@@ -831,10 +871,12 @@ test("replay budgets four protocol cache markers without changing nested tool da
      assert.equal(final.tools[1].cache_control, undefined);
      assert.equal(final.system[0].cache_control, undefined);
      assert.deepEqual(final.system[1].cache_control, marker);
@@ -109,7 +107,7 @@ index 96f76f8..10e1832 100644
      assert.deepEqual(rewrite(once), once);
      final.cache_control = marker;
      final.system.unshift({ type: "text", text: "another system block", cache_control: marker });
-@@ -187,7 +231,7 @@ test("replay budgets four protocol cache markers without changing nested tool da
+@@ -847,7 +889,7 @@ test("replay budgets four protocol cache markers without changing nested tool da
    }
  });
  
@@ -118,7 +116,7 @@ index 96f76f8..10e1832 100644
    const root = await mkdtemp(join(tmpdir(), "pi-claude-payload-"));
    const command = join(root, "claude.mjs");
    const received: any[] = [];
-@@ -196,15 +240,18 @@ test("rewritten Claude requests cross async payload hooks and the loopback relay
+@@ -856,15 +898,18 @@ test("rewritten Claude requests cross async payload hooks and the loopback relay
      for await (const chunk of request) body += chunk;
      received.push(JSON.parse(body));
      const usage = { input_tokens: 2, output_tokens: 1 };
@@ -141,7 +139,7 @@ index 96f76f8..10e1832 100644
      response.end(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
    });
    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
-@@ -232,15 +279,20 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
+@@ -892,15 +937,20 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
      continue;
    }
    const body = { ...extra, system: [{ type: 'text', text: 'system', cache_control: marker }],
@@ -166,7 +164,7 @@ index 96f76f8..10e1832 100644
  }
  `, "utf8");
    await chmod(command, 0o755);
-@@ -253,7 +305,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
+@@ -913,7 +963,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
    ];
    const input = { model: "sonnet", systemPrompt: "system", frames, manifest: [],
      extraBody: { tools: [{ name: "mcp__pi__read", input_schema: { type: "object" }, cache_control: { type: "ephemeral", ttl: "1h" } }] },
@@ -175,7 +173,7 @@ index 96f76f8..10e1832 100644
      env: { PI_CLAUDE_CODE_COMMAND: command }, upstreamUrl: `http://127.0.0.1:${address.port}`, sessionId: "payload-boundary" };
    const observed: any[] = [];
    try {
-@@ -267,18 +319,32 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
+@@ -927,18 +977,32 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
      } });
      assert.equal(first.relay.upstreamRequests, 1);
      assert.deepEqual(received, observed);
@@ -186,7 +184,7 @@ index 96f76f8..10e1832 100644
 -    await runClaudeRequest({ ...input, frames: followup as any, onPayload: async (payload) => {
 +      { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t2", content: "real result" }] } }]
 +      .map((frame, index, all) => index < all.length - 1 ? { ...frame, shouldQuery: false as const } : frame);
-+    const snapshot = { initialUserPrefix: first.initialUserPrefix, initialSystemMessages: first.initialSystemMessages };
++    const snapshot = { initialSystemMessages: first.initialSystemMessages };
 +    const second = await runClaudeRequest({ ...input, ...snapshot, frames: followup as any, onPayload: async (payload) => {
        const replacement = { ...(payload as any), metadata: { user_id: "replaced" } };
        observed.push(structuredClone(replacement));
@@ -213,7 +211,7 @@ index 96f76f8..10e1832 100644
  
      // Block HTTPS independently of the hook so a regression stays offline.
      let externalRequests = 0;
-@@ -299,7 +365,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
+@@ -959,7 +1023,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
      assert.equal(hookCalls, 1);
      assert.equal(externalRequests, 0);
      assert.equal(result.stopReason, "error");

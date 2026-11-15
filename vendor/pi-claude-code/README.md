@@ -68,6 +68,45 @@ These environment variables are optional:
   (default: `claude`).
 - `PI_CLAUDE_CODE_CONFIG_DIR`: Claude Code config directory to use. The
   extension passes it to Claude Code as `CLAUDE_CONFIG_DIR`.
+- `PI_CLAUDE_CODE_POWERSHELL`: PowerShell executable used to run a `.ps1`
+  `PI_CLAUDE_CODE_COMMAND` (default: `pwsh` when installed, otherwise
+  `powershell.exe`).
+
+### Windows
+
+npm installs Claude Code as `claude.cmd` (and a `claude.ps1` for PowerShell).
+Both forms work as `PI_CLAUDE_CODE_COMMAND`:
+
+- `.cmd` and `.bat` launchers run through `cmd.exe` with their arguments
+  escaped once and passed verbatim, so installation paths with spaces and
+  arguments containing quotes or `&` reach Claude Code unchanged.
+- `.ps1` launchers run in a noninteractive PowerShell session with
+  `-NoProfile` and `-ExecutionPolicy Bypass`. The extension prefers `pwsh`
+  (PowerShell 7) because Windows PowerShell 5.1 cannot forward every quoted
+  argument from a script to a native program.
+
+### Model discovery and privacy
+
+The extension asks Claude Code for the account's model catalog automatically.
+The discovery probe allows Claude Code's normal feature-flag and catalog traffic,
+including its usage telemetry, because disabling feature flags hides models such
+as Mythos and previous-generation models. This is a
+[known Claude Code issue](https://github.com/anthropics/claude-code/issues/105923).
+The probe sends no conversation history or generation request. Automatic CLI
+updates, official marketplace auto-install, feedback uploads, and error reporting
+remain disabled.
+
+To opt out of discovery telemetry, set `DISABLE_TELEMETRY=1` before starting Pi.
+Discovery also preserves inherited `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`,
+`DO_NOT_TRACK`, and `DISABLE_GROWTHBOOK` settings. These can reduce the discovered
+catalog; the extension does not remove them to restore missing models. Claude
+Code treats any non-empty `DISABLE_TELEMETRY` or
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` value as enabled, including `0` or
+`false`; unset them to allow normal discovery again. See
+[Claude Code's environment variables](https://code.claude.com/docs/en/env-vars#features-that-need-feature-flag-fetching).
+
+Conversation workers still disable telemetry and nonessential traffic regardless
+of the discovery settings.
 
 ## Usage and billing
 
@@ -75,9 +114,10 @@ Requests made through this extension count against your Claude subscription's
 usage quota and rate limits, the same as any other Claude Code usage. The
 extension does not give you separate or unlimited usage.
 
-To avoid silently changing how you're authenticated or billed, the extension
-refuses to run if your environment sets an API key, proxy, Bedrock, Vertex, or
-Foundry override for Claude Code.
+The extension ignores `ANTHROPIC_API_KEY` in Claude Code child processes without
+changing your environment. To avoid silently changing how you're authenticated
+or billed, it still rejects auth-token, proxy, Bedrock, Vertex, or Foundry
+overrides for Claude Code.
 
 ## Limitations
 
@@ -87,6 +127,10 @@ Foundry override for Claude Code.
   response after that can be slower and may use more quota.
 - Complex tool schemas (nullable types, `oneOf`, `allOf`, `anyOf`) may be
   simplified before Claude sees them.
+- On Windows, Windows PowerShell 5.1 mangles quoted arguments (such as the
+  inline MCP configuration JSON) when a `.ps1` launcher forwards them to a
+  native program. Install PowerShell 7 or use the `claude.cmd` launcher in that
+  case.
 - Adding or removing tools in the middle of a conversation keeps the prompt
   cache only on supported models. On other models it may use more quota.
 

@@ -1,0 +1,512 @@
+diff --git a/src/accounts.ts b/src/accounts.ts
+new file mode 100644
+index 0000000..f28bc96
+--- /dev/null
++++ b/src/accounts.ts
+@@ -0,0 +1,182 @@
++import { randomUUID } from "node:crypto";
++import { link, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
++import { homedir } from "node:os";
++import { dirname, isAbsolute, join, resolve } from "node:path";
++import { setTimeout as sleep } from "node:timers/promises";
++
++/**
++ * Named Claude Code logins. Each account is an absolute Claude Code config
++ * directory holding its own subscription login; the active account is passed
++ * to Claude Code as `CLAUDE_CONFIG_DIR`.
++ */
++export interface ClaudeAccounts {
++  active?: string;
++  accounts: Record<string, string>;
++}
++
++export const DEFAULT_ACCOUNT = "default";
++const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
++/** Command verbs and the configured login cannot name an account. */
++export const RESERVED_NAMES = new Set([DEFAULT_ACCOUNT, "list", "next", "add", "remove"]);
++const LOCK_TIMEOUT_MS = 10_000;
++
++export function accountsPath(agentDir: string): string {
++  return join(agentDir, "claude-code-accounts.json");
++}
++
++/** Resolve `~` and relative directories once, against the caller's working directory. */
++export function absoluteConfigDir(dir: string, cwd: string): string {
++  const trimmed = dir.trim();
++  if (!trimmed) throw new Error("Claude account directory must not be empty");
++  if (trimmed === "~" || trimmed.startsWith("~/")) return join(homedir(), trimmed.slice(1));
++  return isAbsolute(trimmed) ? trimmed : resolve(cwd, trimmed);
++}
++
++function hasAccount(state: ClaudeAccounts, name: string): boolean {
++  return Object.hasOwn(state.accounts, name);
++}
++
++export async function readAccounts(file: string): Promise<ClaudeAccounts> {
++  let text: string;
++  try {
++    text = await readFile(file, "utf8");
++  } catch (error) {
++    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { accounts: {} };
++    throw error;
++  }
++  const value: unknown = JSON.parse(text);
++  const raw = (value as { accounts?: unknown } | null)?.accounts;
++  if (typeof value !== "object" || value === null || typeof raw !== "object" || raw === null || Array.isArray(raw)) {
++    throw new Error(`${file}: expected {"accounts": {"<name>": "<absolute config dir>"}}`);
++  }
++  const accounts: Record<string, string> = {};
++  for (const [name, dir] of Object.entries(raw)) {
++    if (!NAME.test(name) || RESERVED_NAMES.has(name) || typeof dir !== "string" || !isAbsolute(dir)) {
++      throw new Error(`${file}: account ${JSON.stringify(name)} needs a valid name and an absolute directory`);
++    }
++    accounts[name] = dir;
++  }
++  const active = (value as { active?: unknown }).active;
++  return typeof active === "string" && Object.hasOwn(accounts, active) ? { active, accounts } : { accounts };
++}
++
++async function writeAccounts(file: string, state: ClaudeAccounts): Promise<void> {
++  const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
++  try {
++    await writeFile(temp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
++    await rename(temp, file);
++  } catch (error) {
++    await rm(temp, { force: true });
++    throw error;
++  }
++}
++
++const readText = (path: string) => readFile(path, "utf8").catch(() => undefined);
++
++function ownerAlive(token: string): boolean {
++  const pid = Number(token.split(":", 1)[0]);
++  if (!Number.isInteger(pid) || pid <= 0) return false;
++  try {
++    process.kill(pid, 0);
++    return true;
++  } catch (error) {
++    return (error as NodeJS.ErrnoException).code === "EPERM";
++  }
++}
++
++/**
++ * Remove a lock whose owner process has exited. The lock is moved aside first;
++ * if another contender replaced it in the meantime, the live lock is linked back.
++ */
++async function breakAbandonedLock(lock: string, abandoned: string): Promise<void> {
++  const aside = `${lock}.${randomUUID()}.stale`;
++  try {
++    await rename(lock, aside);
++  } catch {
++    return;
++  }
++  if ((await readText(aside)) !== abandoned) await link(aside, lock).catch(() => undefined);
++  await rm(aside, { force: true });
++}
++
++/** Lock files hold `<pid>:<uuid>`; only a lock whose process has exited is broken. */
++async function acquireLock(lock: string): Promise<string> {
++  const token = `${process.pid}:${randomUUID()}`;
++  const deadline = Date.now() + LOCK_TIMEOUT_MS;
++  for (;;) {
++    const staged = `${lock}.${randomUUID()}.new`;
++    try {
++      await writeFile(staged, token, { mode: 0o600 });
++      await link(staged, lock);
++      return token;
++    } catch (error) {
++      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
++    } finally {
++      await rm(staged, { force: true });
++    }
++    const holder = await readText(lock);
++    if (holder !== undefined && !ownerAlive(holder)) await breakAbandonedLock(lock, holder);
++    else if (Date.now() > deadline) {
++      throw new Error(`Timed out waiting for ${lock}; remove it if no Pi session is changing Claude accounts`);
++    }
++    else await sleep(25);
++  }
++}
++
++async function releaseLock(lock: string, token: string): Promise<void> {
++  if ((await readText(lock)) === token) await rm(lock, { force: true });
++}
++
++/** Read, change, and replace the account file under a cross-process lock. */
++export async function updateAccounts(
++  file: string,
++  change: (state: ClaudeAccounts) => ClaudeAccounts,
++): Promise<ClaudeAccounts> {
++  await mkdir(dirname(file), { recursive: true });
++  const lock = `${file}.lock`;
++  const token = await acquireLock(lock);
++  try {
++    const state = change(await readAccounts(file));
++    await writeAccounts(file, state);
++    return state;
++  } finally {
++    await releaseLock(lock, token);
++  }
++}
++
++/** Environment override for the active account, or undefined for the configured login. */
++export function accountEnv(state: ClaudeAccounts): Record<string, string> | undefined {
++  const dir = state.active ? state.accounts[state.active] : undefined;
++  return dir ? { PI_CLAUDE_CODE_CONFIG_DIR: dir, CLAUDE_CONFIG_DIR: dir } : undefined;
++}
++
++export function addAccount(state: ClaudeAccounts, name: string, dir: string): ClaudeAccounts {
++  if (!NAME.test(name) || RESERVED_NAMES.has(name)) {
++    throw new Error(
++      `Account names use letters, digits, '.', '_' or '-'; ${[...RESERVED_NAMES].map((n) => `"${n}"`).join(", ")} are reserved`,
++    );
++  }
++  if (!isAbsolute(dir)) throw new Error(`Claude account directory must be absolute: ${dir}`);
++  return { ...state, accounts: { ...state.accounts, [name]: dir } };
++}
++
++export function removeAccount(state: ClaudeAccounts, name: string): ClaudeAccounts {
++  if (!hasAccount(state, name)) throw new Error(`Unknown Claude account "${name}"`);
++  const accounts = Object.fromEntries(Object.entries(state.accounts).filter(([key]) => key !== name));
++  return state.active === name ? { accounts } : { active: state.active, accounts };
++}
++
++export function selectAccount(state: ClaudeAccounts, name: string): ClaudeAccounts {
++  if (name === DEFAULT_ACCOUNT) return { accounts: state.accounts };
++  if (!hasAccount(state, name)) throw new Error(`Unknown Claude account "${name}"`);
++  return { ...state, active: name };
++}
++
++/** The account after the active one, wrapping around; used when a plan limit is exhausted. */
++export function nextAccount(state: ClaudeAccounts): string | undefined {
++  const names = Object.keys(state.accounts);
++  if (names.length === 0) return undefined;
++  const index = state.active ? names.indexOf(state.active) : -1;
++  const next = names[(index + 1) % names.length];
++  return next === state.active ? undefined : next;
++}
+diff --git a/src/index.ts b/src/index.ts
+index cbeebd2..5de0388 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -1,14 +1,44 @@
+-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
++import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
++import {
++  absoluteConfigDir,
++  accountEnv,
++  accountsPath,
++  addAccount,
++  DEFAULT_ACCOUNT,
++  nextAccount,
++  readAccounts,
++  removeAccount,
++  selectAccount,
++  updateAccounts,
++  type ClaudeAccounts,
++} from "./accounts.ts";
+ import { getClaudeStatus } from "./claude-cli.ts";
+ import { claudeCodeEnv, createClaudeCodeProvider } from "./provider.ts";
+ 
++const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
++
++const USAGE = "Usage: /claude-account [list | next | <name> | add <name> <config-dir> | remove <name>]";
++
++function describe(state: ClaudeAccounts): string {
++  return [DEFAULT_ACCOUNT, ...Object.keys(state.accounts)]
++    .map((name) => {
++      const marker = (state.active ?? DEFAULT_ACCOUNT) === name ? "*" : " ";
++      const dir = name === DEFAULT_ACCOUNT ? "configured Claude Code login" : state.accounts[name];
++      return `${marker} ${name}  ${dir}`;
++    })
++    .join("\n");
++}
++
+ export default function claudeCodeExtension(pi: ExtensionAPI): void {
+-  pi.registerProvider(createClaudeCodeProvider());
++  const file = accountsPath(getAgentDir());
++  const accounts = () => readAccounts(file);
++  const statusEnv = async () => ({ ...claudeCodeEnv(), ...accountEnv(await accounts()) });
++  pi.registerProvider(createClaudeCodeProvider({ accounts }));
+ 
+   pi.registerCommand("claude-code-status", {
+     description: "Check the Claude Code executable and subscription login",
+     handler: async (_args, ctx) => {
+-      const status = await getClaudeStatus(claudeCodeEnv(), ctx.signal);
++      const status = await getClaudeStatus(await statusEnv(), ctx.signal);
+       if (!status.available || !status.loggedIn) {
+         ctx.ui.notify(status.detail ?? "Claude Code is not ready", "error");
+         return;
+@@ -17,6 +47,69 @@ export default function claudeCodeExtension(pi: ExtensionAPI): void {
+       ctx.ui.notify(`Claude Code is installed and logged in${plan}`, "info");
+     },
+   });
++
++  pi.registerCommand("claude-account", {
++    description: "List, add, or switch Claude Code subscription accounts",
++    getArgumentCompletions: async (prefix) => {
++      const state = await accounts().catch((): ClaudeAccounts => ({ accounts: {} }));
++      const items = ["list", "next", "add", "remove", DEFAULT_ACCOUNT, ...Object.keys(state.accounts)]
++        .filter((value) => value.startsWith(prefix))
++        .map((value) => ({ value, label: value }));
++      return items.length ? items : null;
++    },
++    handler: async (args, ctx) => {
++      const [verb = "list", ...rest] = args.trim().split(/\s+/u).filter(Boolean);
++      let state: ClaudeAccounts;
++      try {
++        if (verb === "list") {
++          if (rest.length) throw new Error(USAGE);
++          ctx.ui.notify(describe(await accounts()), "info");
++          return;
++        }
++        if (verb === "add") {
++          const [name, dir] = rest;
++          if (!name || !dir || rest.length > 2) throw new Error(USAGE);
++          const absolute = absoluteConfigDir(dir, ctx.cwd);
++          await updateAccounts(file, (state) => addAccount(state, name, absolute));
++          ctx.ui.notify(
++            `Added Claude account "${name}" at ${absolute}. Log in once with: CLAUDE_CONFIG_DIR=${absolute} claude auth login`,
++            "info",
++          );
++          return;
++        }
++        let change: (state: ClaudeAccounts) => ClaudeAccounts;
++        if (verb === "remove") {
++          const [name] = rest;
++          if (!name || rest.length > 1) throw new Error(USAGE);
++          change = (state) => removeAccount(state, name);
++        } else if (verb === "next") {
++          if (rest.length) throw new Error(USAGE);
++          change = (state) => {
++            const name = nextAccount(state);
++            if (!name) throw new Error("No other Claude account is configured. Add one with /claude-account add <name> <config-dir>");
++            return selectAccount(state, name);
++          };
++        } else {
++          if (rest.length) throw new Error(USAGE);
++          change = (state) => selectAccount(state, verb);
++        }
++        state = await updateAccounts(file, change);
++      } catch (error) {
++        ctx.ui.notify(message(error), "error");
++        return;
++      }
++      const active = state.active ?? DEFAULT_ACCOUNT;
++      const status = await getClaudeStatus({ ...claudeCodeEnv(), ...accountEnv(state) }, ctx.signal).catch(
++        (error: unknown) => ({ available: false, loggedIn: false, detail: message(error), plan: undefined }),
++      );
++      if (!status.available || !status.loggedIn) {
++        ctx.ui.notify(`Claude account "${active}" is selected but not ready: ${status.detail ?? "not logged in"}`, "warning");
++        return;
++      }
++      const plan = status.plan ? ` (${status.plan})` : "";
++      ctx.ui.notify(`Claude requests now use account "${active}"${plan}`, "info");
++    },
++  });
+ }
+ 
+ export { createClaudeCodeProvider } from "./provider.ts";
+diff --git a/src/provider.ts b/src/provider.ts
+index e15020d..51af136 100644
+--- a/src/provider.ts
++++ b/src/provider.ts
+@@ -1,4 +1,5 @@
+ import { createProvider, type AuthContext, type ProviderEnv } from "@earendil-works/pi-ai";
++import { accountEnv, type ClaudeAccounts } from "./accounts.ts";
+ import { discoverClaudeModels, getClaudeStatus, LOGIN_HINT, POWERSHELL_ENV } from "./claude-cli.ts";
+ import { API_ID, CLAUDE_CODE_MODELS, modelFromDiscovery, PROVIDER_ID } from "./model-catalog.ts";
+ import { streamClaudeCode } from "./stream.ts";
+@@ -31,8 +32,15 @@ export function claudeCodeEnv(): Record<string, string | undefined> {
+   return { ...process.env, ...lastProviderEnv };
+ }
+ 
+-export function createClaudeCodeProvider() {
++export interface ClaudeCodeProviderOptions {
++  /** Reads the account selection; its config directory overrides configured settings. */
++  accounts?: () => Promise<ClaudeAccounts>;
++}
++
++export function createClaudeCodeProvider(options: ClaudeCodeProviderOptions = {}) {
+   let discoveredIds: Set<string> | undefined;
++  const selected = async () => (options.accounts ? accountEnv(await options.accounts()) : undefined);
++  const currentEnv = async () => ({ ...claudeCodeEnv(), ...(await selected()) });
+   const externalOAuthMarker = () => ({
+     type: "oauth" as const,
+     access: "claude-code-external",
+@@ -52,7 +60,7 @@ export function createClaudeCodeProvider() {
+         async check({ ctx, signal }) {
+           const providerEnv = await providerEnvironment(ctx);
+           lastProviderEnv = providerEnv;
+-          const status = await getClaudeStatus(claudeCodeEnv(), signal);
++          const status = await getClaudeStatus(await currentEnv(), signal);
+           // Only report the provider as configured when Claude Code is
+           // installed and logged in, so Pi hides its models otherwise.
+           if (!status.available || !status.loggedIn) return undefined;
+@@ -67,7 +75,7 @@ export function createClaudeCodeProvider() {
+           lastProviderEnv = providerEnv;
+           return {
+             auth: { apiKey: "external-process" },
+-            env: providerEnv,
++            env: { ...providerEnv, ...(await selected()) },
+             source: "Claude Code CLI",
+           };
+         },
+@@ -85,7 +93,7 @@ export function createClaudeCodeProvider() {
+           );
+         },
+         async refresh(_credential, signal) {
+-          const status = await getClaudeStatus(claudeCodeEnv(), signal);
++          const status = await getClaudeStatus(await currentEnv(), signal);
+           if (!status.subscription) throw new Error(status.detail ?? LOGIN_HINT);
+           return externalOAuthMarker();
+         },
+@@ -96,7 +104,7 @@ export function createClaudeCodeProvider() {
+     },
+     models: CLAUDE_CODE_MODELS,
+     async fetchModels({ signal }) {
+-      const models = (await discoverClaudeModels(claudeCodeEnv(), signal)).map(modelFromDiscovery);
++      const models = (await discoverClaudeModels(await currentEnv(), signal)).map(modelFromDiscovery);
+       discoveredIds = new Set(models.map((model) => model.id));
+       return models;
+     },
+diff --git a/tests/accounts.test.ts b/tests/accounts.test.ts
+new file mode 100644
+index 0000000..d2c4e35
+--- /dev/null
++++ b/tests/accounts.test.ts
+@@ -0,0 +1,133 @@
++import assert from "node:assert/strict";
++import { spawnSync } from "node:child_process";
++import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
++import { dirname } from "node:path";
++import { homedir, tmpdir } from "node:os";
++import { join } from "node:path";
++import test from "node:test";
++import {
++  absoluteConfigDir,
++  accountEnv,
++  accountsPath,
++  addAccount,
++  nextAccount,
++  readAccounts,
++  removeAccount,
++  selectAccount,
++  updateAccounts,
++  type ClaudeAccounts,
++} from "../src/accounts.ts";
++import { createClaudeCodeProvider } from "../src/provider.ts";
++
++async function withAgentDir(run: (file: string) => Promise<void>): Promise<void> {
++  const root = await mkdtemp(join(tmpdir(), "pi-claude-accounts-"));
++  try {
++    await run(accountsPath(root));
++  } finally {
++    await rm(root, { recursive: true, force: true });
++  }
++}
++
++test("account selection round-trips through a private state file", () =>
++  withAgentDir(async (file) => {
++    assert.deepEqual(await readAccounts(file), { accounts: {} });
++    await updateAccounts(file, (state) => addAccount(state, "work", "/srv/claude-work"));
++    const state = await updateAccounts(file, (current) => selectAccount(current, "work"));
++    assert.equal((await stat(file)).mode & 0o777, 0o600);
++    assert.deepEqual(await readAccounts(file), state);
++    assert.deepEqual(accountEnv(state), { PI_CLAUDE_CODE_CONFIG_DIR: "/srv/claude-work", CLAUDE_CONFIG_DIR: "/srv/claude-work" });
++    assert.equal(JSON.parse(await readFile(file, "utf8")).active, "work");
++  }));
++
++test("concurrent updates from several sessions are all kept", () =>
++  withAgentDir(async (file) => {
++    const names = Array.from({ length: 12 }, (_, index) => `acct${index}`);
++    await Promise.all(names.map((name) => updateAccounts(file, (state) => addAccount(state, name, `/srv/${name}`))));
++    assert.deepEqual(Object.keys((await readAccounts(file)).accounts).sort(), names.sort());
++
++    const rotate = (state: ClaudeAccounts) => selectAccount(state, nextAccount(state)!);
++    const picks = await Promise.all(names.map(() => updateAccounts(file, rotate)));
++    assert.equal(new Set(picks.map((state) => state.active)).size, names.length, "each rotation sees the previous one");
++  }));
++
++test("a lock left by an exited process is broken; a live holder's lock is not", () =>
++  withAgentDir(async (file) => {
++    const exited = spawnSync(process.execPath, ["-e", ""]).pid;
++    await writeFile(`${file}.lock`, `${exited}:abandoned`);
++    await updateAccounts(file, (state) => addAccount(state, "work", "/srv/claude-work"));
++    assert.deepEqual(Object.keys((await readAccounts(file)).accounts), ["work"]);
++    assert.deepEqual((await readdir(dirname(file))).sort(), ["claude-code-accounts.json"], "no lock or temporary files remain");
++
++    await writeFile(`${file}.lock`, `${process.pid}:held-elsewhere`);
++    const waiting = updateAccounts(file, (state) => addAccount(state, "home", "/srv/claude-home"));
++    await new Promise((resolve) => setTimeout(resolve, 150));
++    assert.deepEqual(Object.keys((await readAccounts(file)).accounts), ["work"], "the live lock is respected");
++    await rm(`${file}.lock`);
++    await waiting;
++    assert.deepEqual(Object.keys((await readAccounts(file)).accounts).sort(), ["home", "work"]);
++  }));
++
++test("a failed change leaves the previous state and releases the lock", () =>
++  withAgentDir(async (file) => {
++    await updateAccounts(file, (state) => addAccount(state, "work", "/srv/claude-work"));
++    await assert.rejects(updateAccounts(file, (state) => selectAccount(state, "missing")), /Unknown Claude account/);
++    assert.equal((await readAccounts(file)).active, undefined);
++    assert.deepEqual(await readdir(dirname(file)), ["claude-code-accounts.json"]);
++  }));
++
++test("directories are made absolute once, against the caller's working directory", () => {
++  assert.equal(absoluteConfigDir("~/.claude-work", "/project"), join(homedir(), ".claude-work"));
++  assert.equal(absoluteConfigDir("logins/work", "/project"), "/project/logins/work");
++  assert.equal(absoluteConfigDir(" /srv/claude ", "/project"), "/srv/claude");
++  assert.throws(() => absoluteConfigDir("  ", "/project"), /must not be empty/);
++  assert.throws(() => addAccount({ accounts: {} }, "work", "relative/dir"), /must be absolute/);
++});
++
++test("next rotates through named accounts and default restores the configured login", () => {
++  const base = addAccount(addAccount({ accounts: {} }, "a", "/a"), "b", "/b");
++  assert.equal(nextAccount(base), "a");
++  assert.equal(nextAccount(selectAccount(base, "a")), "b");
++  assert.equal(nextAccount(selectAccount(base, "b")), "a");
++  assert.equal(nextAccount(selectAccount(addAccount({ accounts: {} }, "solo", "/s"), "solo")), undefined);
++  assert.equal(accountEnv(selectAccount(selectAccount(base, "a"), "default")), undefined);
++  assert.equal(removeAccount(selectAccount(base, "a"), "a").active, undefined);
++  assert.throws(() => selectAccount(base, "missing"), /Unknown Claude account/);
++  for (const verb of ["default", "list", "next", "add", "remove"]) assert.throws(() => addAccount(base, verb, "/x"), /reserved/);
++  assert.throws(() => addAccount(base, "../escape", "/x"), /Account names/);
++});
++
++test("inherited object names are not accounts", () => {
++  for (const name of ["constructor", "toString", "hasOwnProperty"]) {
++    assert.throws(() => selectAccount({ accounts: {} }, name), /Unknown Claude account/);
++    assert.throws(() => removeAccount({ accounts: {} }, name), /Unknown Claude account/);
++  }
++});
++
++test("malformed state files are rejected and a stale selection falls back", () =>
++  withAgentDir(async (file) => {
++    for (const bad of ["[]", "null", '{"accounts": []}', '{"accounts": {"w": "relative"}}', '{"accounts": {"default": "/d"}}']) {
++      await writeFile(file, bad);
++      await assert.rejects(readAccounts(file), new RegExp(file.replaceAll("/", "\\/")));
++    }
++    await writeFile(file, JSON.stringify({ active: "constructor", accounts: { work: "/w" } }));
++    assert.equal((await readAccounts(file)).active, undefined);
++  }));
++
++test("requests, status, and discovery use the selection another session wrote", () =>
++  withAgentDir(async (file) => {
++    const provider = createClaudeCodeProvider({ accounts: () => readAccounts(file) });
++    const isolated = createClaudeCodeProvider();
++    const ctx = {
++      env: async (name: string) => (name === "PI_CLAUDE_CODE_CONFIG_DIR" ? "/srv/claude-settings" : undefined),
++      fileExists: async () => false,
++    };
++    const configDir = async (target: typeof provider) =>
++      (await target.auth.apiKey!.resolve!({ ctx, signal: new AbortController().signal } as never))!.env?.PI_CLAUDE_CODE_CONFIG_DIR;
++
++    assert.equal(await configDir(provider), "/srv/claude-settings");
++    await updateAccounts(file, (state) => selectAccount(addAccount(state, "work", "/srv/claude-work"), "work"));
++    assert.equal(await configDir(provider), "/srv/claude-work");
++    assert.equal(await configDir(isolated), "/srv/claude-settings", "a provider without accounts keeps its settings");
++    await updateAccounts(file, (state) => selectAccount(state, "default"));
++    assert.equal(await configDir(provider), "/srv/claude-settings");
++  }));
